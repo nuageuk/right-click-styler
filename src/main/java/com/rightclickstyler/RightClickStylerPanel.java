@@ -415,7 +415,11 @@ class RightClickStylerPanel extends PluginPanel
 		section.addRow(row("Corner radius", radiusSpinner));
 
 		JSpinner opacitySpinner = themeIntSpinner(t -> t.opacity, Theme::withOpacity, Limits.MIN_OPACITY, Limits.MAX_OPACITY);
-		section.addRow(row("Opacity", opacitySpinner));
+		section.addRow(row("Background opacity", opacitySpinner));
+
+		JSpinner hoverOpacitySpinner = themeIntSpinner(t -> t.hoverOpacity, Theme::withHoverOpacity,
+			Limits.MIN_OPACITY, Limits.MAX_OPACITY);
+		section.addRow(row("Hover opacity", hoverOpacitySpinner));
 
 		JComboBox<HoverStyle> hoverCombo = new JComboBox<>(HoverStyle.values());
 		hoverCombo.setRenderer(new TitleCaseListCellRenderer());

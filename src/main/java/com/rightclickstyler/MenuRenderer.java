@@ -139,7 +139,8 @@ final class MenuRenderer
 			int alpha = (int) Math.round(theme.opacity * MAX_ALPHA / PERCENT);
 			bgColour = ColorUtil.colorWithAlpha(theme.bg, alpha);
 			headerColour = ColorUtil.colorWithAlpha(theme.header, alpha);
-			hoverColour = ColorUtil.colorWithAlpha(theme.hover, alpha);
+			hoverColour = ColorUtil.colorWithAlpha(theme.hover,
+				(int) Math.round(theme.hoverOpacity * MAX_ALPHA / PERCENT));
 		}
 		this.client = client;
 		metrics = graphics.getFontMetrics(font);
@@ -178,6 +179,8 @@ final class MenuRenderer
 		graphics.clip(shape);
 		if (theme.showHeader)
 		{
+			// Header and hover fills use source-over on the menu background. Each
+			// fill's alpha compounds with the background where they overlap.
 			graphics.setColor(headerColour);
 			graphics.fillRect(bounds.x, bounds.y, bounds.width, HEADER_HEIGHT);
 			graphics.setFont(font);
