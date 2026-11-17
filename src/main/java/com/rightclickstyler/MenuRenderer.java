@@ -49,6 +49,8 @@ final class MenuRenderer
 
 	private static final String HEADER_TEXT = "Choose Option";
 	private static final Color DEFAULT_TAG_COLOUR = Color.YELLOW;
+	private static final Color NATIVE_ITEM_COLOUR = new Color(0xFF9040);
+	private static final Color NATIVE_OBJECT_COLOUR = Color.CYAN;
 	private static final Color TEXT_SHADOW_COLOUR = Color.BLACK;
 	private static final Color HIT_ROW_COLOUR = Color.MAGENTA;
 	private static final int TEXT_SHADOW_OFFSET = 1;
@@ -536,11 +538,15 @@ final class MenuRenderer
 		Matcher matcher = TAG.matcher(raw);
 		int last = 0;
 		Color current = null;
+		int colourSpan = -1;
+		boolean uncolouredPrefix = false;
 		while (matcher.find())
 		{
 			if (matcher.start() > last)
 			{
-				runs.add(new Run(collapse(raw.substring(last, matcher.start())), current));
+				String text = collapse(raw.substring(last, matcher.start()));
+				runs.add(new Run(text, current, colourSpan));
+				uncolouredPrefix |= colourSpan < 0 && !text.trim().isEmpty();
 			}
 			last = matcher.end();
 
@@ -550,6 +556,7 @@ final class MenuRenderer
 			if (col.matches())
 			{
 				current = new Color(Integer.parseInt(col.group(1), 16));
+				colourSpan = colourSpan < 0 && uncolouredPrefix ? 1 : colourSpan + 1;
 			}
 			else if (inner.equalsIgnoreCase(CLOSE_COL))
 			{
@@ -562,7 +569,7 @@ final class MenuRenderer
 		}
 		if (last < raw.length())
 		{
-			runs.add(new Run(collapse(raw.substring(last)), current));
+			runs.add(new Run(collapse(raw.substring(last)), current, colourSpan));
 		}
 		return runs;
 	}
@@ -585,9 +592,10 @@ final class MenuRenderer
 		{
 			if (matcher.start() > last)
 			{
-				out.add(new Run(run.text.substring(last, matcher.start()), run.tagColour));
+				out.add(new Run(run.text.substring(last, matcher.start()), run.tagColour, run.colourSpan));
 			}
-			out.add(new Run(matcher.group(), run.tagColour, true, Integer.parseInt(matcher.group(1)), -1));
+			out.add(new Run(matcher.group(), run.tagColour, run.colourSpan,
+				true, Integer.parseInt(matcher.group(1)), -1));
 			last = matcher.end();
 		}
 		if (last == 0)
@@ -596,7 +604,7 @@ final class MenuRenderer
 		}
 		else if (last < run.text.length())
 		{
-			out.add(new Run(run.text.substring(last), run.tagColour));
+			out.add(new Run(run.text.substring(last), run.tagColour, run.colourSpan));
 		}
 	}
 
@@ -701,6 +709,13 @@ final class MenuRenderer
 			{
 				return tagColour;
 			}
+			// Native target tags are the category defaults. A different colour, or a
+			// later span within the target, is intentional formatting to preserve.
+			if (run.tagColour != null && (run.colourSpan > 0
+				|| !isNativeTargetColour(run.tagColour, kind)))
+			{
+				return run.tagColour;
+			}
 			switch (kind)
 			{
 				case NPC:
@@ -714,6 +729,24 @@ final class MenuRenderer
 				case OTHER:
 				default:
 					return orDefault(other, tagColour);
+			}
+		}
+
+		private static boolean isNativeTargetColour(Color colour, TargetKind kind)
+		{
+			switch (kind)
+			{
+				case NPC:
+					return DEFAULT_TAG_COLOUR.equals(colour);
+				case PLAYER:
+					return Color.WHITE.equals(colour);
+				case ITEM:
+					return NATIVE_ITEM_COLOUR.equals(colour);
+				case OBJECT:
+					return NATIVE_OBJECT_COLOUR.equals(colour);
+				case OTHER:
+				default:
+					return DEFAULT_TAG_COLOUR.equals(colour) || Color.WHITE.equals(colour);
 			}
 		}
 
@@ -741,19 +774,21 @@ final class MenuRenderer
 	{
 		private final String text;
 		private final Color tagColour;
+		private final int colourSpan;
 		private final boolean isLevel;
 		private final int level;
 		private final int iconIndex;
 
-		private Run(String text, Color tagColour)
+		private Run(String text, Color tagColour, int colourSpan)
 		{
-			this(text, tagColour, false, 0, -1);
+			this(text, tagColour, colourSpan, false, 0, -1);
 		}
 
-		private Run(String text, Color tagColour, boolean isLevel, int level, int iconIndex)
+		private Run(String text, Color tagColour, int colourSpan, boolean isLevel, int level, int iconIndex)
 		{
 			this.text = text;
 			this.tagColour = tagColour;
+			this.colourSpan = colourSpan;
 			this.isLevel = isLevel;
 			this.level = level;
 			this.iconIndex = iconIndex;
@@ -761,7 +796,7 @@ final class MenuRenderer
 
 		private static Run icon(int index)
 		{
-			return new Run("", null, false, 0, index);
+			return new Run("", null, -1, false, 0, index);
 		}
 	}
 }

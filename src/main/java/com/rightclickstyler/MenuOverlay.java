@@ -199,7 +199,7 @@ class MenuOverlay extends Overlay
 		{
 			return MenuRenderer.TargetKind.OBJECT;
 		}
-		if (entry.getItemId() != NO_ITEM)
+		if (isGroundItemAction(type) || entry.getItemId() != NO_ITEM)
 		{
 			return MenuRenderer.TargetKind.ITEM;
 		}
@@ -222,6 +222,28 @@ class MenuOverlay extends Overlay
 			case GAME_OBJECT_FOURTH_OPTION:
 			case GAME_OBJECT_FIFTH_OPTION:
 			case EXAMINE_OBJECT:
+				return true;
+			default:
+				return false;
+		}
+	}
+
+	private static boolean isGroundItemAction(MenuAction type)
+	{
+		if (type == null)
+		{
+			return false;
+		}
+		switch (type)
+		{
+			case ITEM_USE_ON_GROUND_ITEM:
+			case WIDGET_TARGET_ON_GROUND_ITEM:
+			case GROUND_ITEM_FIRST_OPTION:
+			case GROUND_ITEM_SECOND_OPTION:
+			case GROUND_ITEM_THIRD_OPTION:
+			case GROUND_ITEM_FOURTH_OPTION:
+			case GROUND_ITEM_FIFTH_OPTION:
+			case EXAMINE_ITEM_GROUND:
 				return true;
 			default:
 				return false;

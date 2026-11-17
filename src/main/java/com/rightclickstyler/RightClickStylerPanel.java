@@ -99,6 +99,13 @@ class RightClickStylerPanel extends PluginPanel
 		RightClickStylerConfig.KEY_BASELINE_NUDGE,
 		RightClickStylerConfig.KEY_SHOW_HIT_ROWS
 	};
+	private static final String[] TARGET_COLOUR_KEYS = {
+		RightClickStylerConfig.KEY_NPC_COLOUR,
+		RightClickStylerConfig.KEY_PLAYER_COLOUR,
+		RightClickStylerConfig.KEY_ITEM_COLOUR,
+		RightClickStylerConfig.KEY_OBJECT_COLOUR,
+		RightClickStylerConfig.KEY_OTHER_COLOUR
+	};
 	private static final Consumer<Color> NOTHING = c ->
 	{
 	};
@@ -546,15 +553,84 @@ class RightClickStylerPanel extends PluginPanel
 		ColorJButton item = globalColourButton(config::itemColour, "Item colour", RightClickStylerConfig.KEY_ITEM_COLOUR);
 		ColorJButton object = globalColourButton(config::objectColour, "Object colour", RightClickStylerConfig.KEY_OBJECT_COLOUR);
 		ColorJButton other = globalColourButton(config::otherColour, "Other colour", RightClickStylerConfig.KEY_OTHER_COLOUR);
+		JPanel npcRow = row("NPC", npc);
+		JPanel playerRow = row("Player", player);
+		JPanel itemRow = row("Item", item);
+		JPanel objectRow = row("Object", object);
+		JPanel otherRow = row("Other", other);
+		JButton reset = new JButton("Reset Target Colours to Defaults");
+		reset.addActionListener(e -> resetTargetColours());
 
-		section.addRow(row("Mode", modeCombo(TargetMode.values(), config::targetMode, TargetMode.CUSTOM,
-			RightClickStylerConfig.KEY_TARGET_MODE, npc, player, item, object, other)));
-		section.addRow(row("NPC", npc));
-		section.addRow(row("Player", player));
-		section.addRow(row("Item", item));
-		section.addRow(row("Object", object));
-		section.addRow(row("Other", other));
+		JComboBox<TargetMode> mode = modeCombo(TargetMode.values(), config::targetMode, TargetMode.CUSTOM,
+			RightClickStylerConfig.KEY_TARGET_MODE, npcRow, playerRow, itemRow, objectRow, otherRow, reset);
+		JLabel explanation = new JLabel("Game colours active. Custom to edit.");
+		explanation.setFont(FontManager.getRunescapeSmallFont());
+		explanation.setEnabled(false);
+		JPanel modeRow = row("Mode", mode);
+		modeRow.add(explanation, BorderLayout.SOUTH);
+		ColorJButton[] colourButtons = {npc, player, item, object, other};
+		Runnable updateAppearance = () ->
+		{
+			boolean custom = mode.getSelectedItem() == TargetMode.CUSTOM;
+			explanation.setVisible(!custom);
+			Color[] configured = {config.npcColour(), config.playerColour(), config.itemColour(),
+				config.objectColour(), config.otherColour()};
+			for (int i = 0; i < colourButtons.length; i++)
+			{
+				// Keep the saved hex text; only the disabled swatch is muted.
+				setColourButton(colourButtons[i], configured[i]);
+				if (!custom)
+				{
+					colourButtons[i].setColor(mutedTargetColour(configured[i]));
+				}
+			}
+		};
+		mode.addActionListener(e -> updateAppearance.run());
+		globalControlRefreshers.add(updateAppearance);
+		updateAppearance.run();
+
+		section.addRow(modeRow);
+		section.addRow(npcRow);
+		section.addRow(playerRow);
+		section.addRow(itemRow);
+		section.addRow(objectRow);
+		section.addRow(otherRow);
+		section.addRow(reset);
 		return section;
+	}
+
+	private static Color mutedTargetColour(Color colour)
+	{
+		Color grey = ColorScheme.DARKER_GRAY_COLOR;
+		return new Color((colour.getRed() + 3 * grey.getRed()) / 4,
+			(colour.getGreen() + 3 * grey.getGreen()) / 4,
+			(colour.getBlue() + 3 * grey.getBlue()) / 4, colour.getAlpha());
+	}
+
+	private void resetTargetColours()
+	{
+		resetTargetColourSettings(key -> configManager.unsetConfiguration(RightClickStylerConfig.GROUP, key));
+		refreshing = true;
+		try
+		{
+			for (Runnable control : globalControlRefreshers)
+			{
+				control.run();
+			}
+		}
+		finally
+		{
+			refreshing = false;
+		}
+		preview.refresh();
+	}
+
+	static void resetTargetColourSettings(Consumer<String> unset)
+	{
+		for (String key : TARGET_COLOUR_KEYS)
+		{
+			unset.accept(key);
+		}
 	}
 
 	private CollapsibleSection buildLevelsSection()
@@ -618,10 +694,10 @@ class RightClickStylerPanel extends PluginPanel
 	}
 
 	/**
-	 * A global mode combo whose colour buttons are only enabled in the mode that uses them.
+	 * A global mode combo whose dependent controls are only enabled in the mode that uses them.
 	 */
 	private <E extends Enum<E>> JComboBox<E> modeCombo(E[] modes, Supplier<E> getter, E customMode, String key,
-		ColorJButton... colourButtons)
+		JComponent... dependentControls)
 	{
 		JComboBox<E> combo = new JComboBox<>(modes);
 		combo.setRenderer(new TitleCaseListCellRenderer());
@@ -629,10 +705,7 @@ class RightClickStylerPanel extends PluginPanel
 		Runnable updateEnabled = () ->
 		{
 			boolean custom = combo.getSelectedItem() == customMode;
-			for (ColorJButton button : colourButtons)
-			{
-				button.setEnabled(custom);
-			}
+			setModeControlsEnabled(custom, dependentControls);
 		};
 		updateEnabled.run();
 		combo.addActionListener(e ->
@@ -643,8 +716,27 @@ class RightClickStylerPanel extends PluginPanel
 			}
 			updateEnabled.run();
 		});
-		globalControlRefreshers.add(() -> combo.setSelectedItem(getter.get()));
+		globalControlRefreshers.add(() ->
+		{
+			combo.setSelectedItem(getter.get());
+			updateEnabled.run();
+		});
 		return combo;
+	}
+
+	static void setModeControlsEnabled(boolean enabled, JComponent... controls)
+	{
+		for (JComponent control : controls)
+		{
+			control.setEnabled(enabled);
+			if (control instanceof JPanel)
+			{
+				for (Component child : control.getComponents())
+				{
+					child.setEnabled(enabled);
+				}
+			}
+		}
 	}
 
 	private JSpinner globalIntSpinner(IntSupplier getter, int min, int max, String key)

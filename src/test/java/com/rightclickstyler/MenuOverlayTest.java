@@ -68,6 +68,30 @@ public class MenuOverlayTest
 		}
 	}
 
+	@Test
+	public void classifiesGroundItemsEvenWithoutAnItemIdField()
+	{
+		MenuAction[] groundActions = {
+			MenuAction.ITEM_USE_ON_GROUND_ITEM,
+			MenuAction.WIDGET_TARGET_ON_GROUND_ITEM,
+			MenuAction.GROUND_ITEM_FIRST_OPTION,
+			MenuAction.GROUND_ITEM_SECOND_OPTION,
+			MenuAction.GROUND_ITEM_THIRD_OPTION,
+			MenuAction.GROUND_ITEM_FOURTH_OPTION,
+			MenuAction.GROUND_ITEM_FIFTH_OPTION,
+			MenuAction.EXAMINE_ITEM_GROUND
+		};
+		for (MenuAction action : groundActions)
+		{
+			MenuEntry entry = new StubMenuEntry(action, -1, null).setIdentifier(2434);
+			assertEquals(action.name(), MenuRenderer.TargetKind.ITEM, MenuOverlay.classify(entry));
+		}
+		assertEquals(MenuRenderer.TargetKind.ITEM,
+			MenuOverlay.classify(new StubMenuEntry(MenuAction.CC_OP, 2434, null)));
+		assertEquals(MenuRenderer.TargetKind.OTHER,
+			MenuOverlay.classify(new StubMenuEntry(MenuAction.CANCEL, -1, null)));
+	}
+
 	private static final class StubMenu implements Menu
 	{
 		private final int x;
@@ -137,6 +161,7 @@ public class MenuOverlayTest
 	{
 		private MenuAction type;
 		private int itemId;
+		private int identifier;
 		private final Menu submenu;
 
 		private StubMenuEntry(MenuAction type, int itemId, Menu submenu)
@@ -173,12 +198,13 @@ public class MenuOverlayTest
 		@Override
 		public int getIdentifier()
 		{
-			return 0;
+			return identifier;
 		}
 
 		@Override
 		public MenuEntry setIdentifier(int identifier)
 		{
+			this.identifier = identifier;
 			return this;
 		}
 
