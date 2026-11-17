@@ -6,10 +6,13 @@ import javax.swing.SwingUtilities;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.Menu;
+import net.runelite.api.MenuEntry;
 import net.runelite.api.Player;
 import net.runelite.api.events.BeforeMenuRender;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
+import net.runelite.api.events.MenuOpened;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.config.RuneLiteConfig;
@@ -38,6 +41,7 @@ public class RightClickStylerPlugin extends Plugin
 	private static final String INTERFACE_STYLES_WARNING = NAME
 		+ ": turn off Interface Styles' High detail menu and set its Menu alpha to 255.";
 	private static final int NAV_PRIORITY = 5;
+	private static final boolean SUBMENU_PROTOTYPE = Boolean.getBoolean("rightclickstyler.submenuPrototype");
 
 	@Inject
 	private Client client;
@@ -76,6 +80,7 @@ public class RightClickStylerPlugin extends Plugin
 	// reset in shutDown.
 	private volatile boolean warnedAboutInterfaceStylesConflict;
 	private volatile boolean running;
+	private boolean preparingPrototype;
 
 	@Override
 	protected void startUp()
@@ -103,6 +108,7 @@ public class RightClickStylerPlugin extends Plugin
 	protected void shutDown()
 	{
 		running = false;
+		menuOverlay.clearPrepared();
 		overlayManager.remove(menuOverlay);
 		if (navigationButton != null)
 		{
@@ -118,9 +124,54 @@ public class RightClickStylerPlugin extends Plugin
 	@Subscribe
 	public void onBeforeMenuRender(BeforeMenuRender event)
 	{
+		if (SUBMENU_PROTOTYPE)
+		{
+			if (preparingPrototype)
+			{
+				menuOverlay.recordReentrantEvent();
+				return;
+			}
+			menuOverlay.discardPreparedAtEventStart();
+			if (client.isMenuOpen())
+			{
+				Menu root = client.getMenu();
+				MenuEntry[] entries = root == null ? null : root.getMenuEntries();
+				if (entries != null
+					&& (MenuOverlay.containsSubMenu(entries) || client.isMenuScrollable()))
+				{
+					if (event.isConsumed())
+					{
+						menuOverlay.recordAlreadyConsumedSubmenu();
+						return;
+					}
+					preparingPrototype = true;
+					try
+					{
+						if (menuOverlay.prepareSubmenuFrame(root, entries))
+						{
+							event.consume();
+						}
+					}
+					finally
+					{
+						preparingPrototype = false;
+					}
+					return;
+				}
+			}
+		}
 		if (menuOverlay.shouldDraw())
 		{
 			event.consume();
+		}
+	}
+
+	@Subscribe
+	public void onMenuOpened(MenuOpened event)
+	{
+		if (MenuOverlay.hardenedLifecycle())
+		{
+			menuOverlay.clearPrepared();
 		}
 	}
 
@@ -129,6 +180,10 @@ public class RightClickStylerPlugin extends Plugin
 	@Subscribe
 	public void onGameTick(GameTick event)
 	{
+		if (SUBMENU_PROTOTYPE)
+		{
+			menuOverlay.reportPrototype();
+		}
 		Player player = client.getLocalPlayer();
 		if (player != null)
 		{

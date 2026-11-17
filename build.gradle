@@ -35,12 +35,44 @@ tasks.withType(JavaCompile).configureEach {
 	options.release.set(11)
 }
 
+// Temporary local validation only: experiment sources are excluded from the production jar.
+sourceSets.test.java.srcDir 'experiments'
+
+tasks.withType(Test).configureEach {
+	systemProperty 'rightclickstyler.submenuLifecycle',
+		project.findProperty('testSubmenuLifecycle') ?: 'hardened'
+}
+
 tasks.register('run', JavaExec) {
 	classpath = sourceSets.test.runtimeClasspath
 	mainClass = pluginMainClass
 
-	jvmArgs "-ea"
+	jvmArgs "-ea", "-Drightclickstyler.submenuPrototype=${project.findProperty('submenuPrototype') ?: 'false'}",
+		"-Drightclickstyler.submenuTrace=${project.findProperty('submenuTrace') ?: 'false'}",
+		"-Drightclickstyler.submenuLifecycle=${project.findProperty('submenuLifecycle') ?: 'baseline'}"
 	args "--developer-mode", "--debug"
+}
+
+tasks.register('runDiagnostic', JavaExec) {
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'com.rightclickstyler.SubmenuDiagnosticLauncher'
+	jvmArgs '-ea', "-Drightclickstyler.submenuProbe=${project.findProperty('submenuProbe') ?: 'true'}"
+	args '--developer-mode', '--debug'
+}
+
+tasks.register('runSubmenuHarness', JavaExec) {
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'experiments.SubmenuRasterProbeHarness'
+	jvmArgs '-ea'
+}
+
+tasks.register('benchmarkSubmenuPrototype', JavaExec) {
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'com.rightclickstyler.MenuOverlayTest'
+	jvmArgs '-ea'
+	if (project.hasProperty('benchmarkMode')) {
+		args project.property('benchmarkMode').toString()
+	}
 }
 
 tasks.register('shadowJar', Jar) {
@@ -63,6 +95,8 @@ tasks.register('shadowJar', Jar) {
 	exclude 'META-INF/*.DSA'
 	exclude 'META-INF/*.RSA'
 	exclude '**/module-info.class'
+	exclude 'experiments/**'
+	exclude 'com/rightclickstyler/SubmenuDiagnostic*'
 
 	group = BasePlugin.BUILD_GROUP
 	archiveClassifier.set('shadow')
