@@ -3,6 +3,8 @@ package com.rightclickstyler;
 import com.google.gson.Gson;
 import java.awt.Color;
 import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 import net.runelite.client.config.ConfigItem;
@@ -48,6 +50,136 @@ public class ThemeManagerTest
 		assertEquals(editedBackground, target.active().bg);
 		assertTrue(BuiltInThemes.find(BuiltInThemes.DEFAULT_ID).builtIn);
 		assertNotEquals(editedBackground, BuiltInThemes.find(BuiltInThemes.DEFAULT_ID).bg);
+	}
+
+	@Test
+	public void opacityRoundTripsThroughPersistenceAndClipboard()
+	{
+		for (int opacity : new int[]{0, 1, 10, 40, 100})
+		{
+			TestConfig config = new TestConfig();
+			ThemeManager source = manager(config);
+			source.setWorking(source.effectiveTheme().withOpacity(opacity));
+			assertTrue(source.saveAsNew("Opacity " + opacity));
+			assertEquals(opacity, manager(config).active().opacity);
+
+			ThemeManager target = manager(new TestConfig());
+			assertNull(target.importTheme(source.exportWorking()));
+			assertEquals(opacity, target.active().opacity);
+		}
+	}
+
+	@Test
+	public void importedOpacityClampsToFullRangeAndMissingValueKeepsDefault()
+	{
+		for (int[] caseValue : new int[][]{{-1, 0}, {0, 0}, {100, 100}, {101, 100}})
+		{
+			ThemeManager target = manager(new TestConfig());
+			String json = "{\"id\":\"imported\",\"name\":\"Imported\",\"opacity\":"
+				+ caseValue[0] + "}";
+			assertNull(target.importTheme(Base64.getEncoder().encodeToString(json.getBytes(StandardCharsets.UTF_8))));
+			assertEquals(caseValue[1], target.active().opacity);
+		}
+		ThemeManager target = manager(new TestConfig());
+		String json = "{\"id\":\"imported\",\"name\":\"Imported\"}";
+		assertNull(target.importTheme(Base64.getEncoder().encodeToString(json.getBytes(StandardCharsets.UTF_8))));
+		assertEquals(BuiltInThemes.find(BuiltInThemes.DEFAULT_ID).opacity, target.active().opacity);
+	}
+
+	@Test
+	public void legacyThemesInheritHoverOpacityFromBackgroundOpacity()
+	{
+		for (int opacity : new int[]{40, 75, 100})
+		{
+			String json = "{\"id\":\"legacy\",\"name\":\"Legacy\",\"opacity\":" + opacity + "}";
+			ThemeManager imported = manager(new TestConfig());
+			assertNull(imported.importTheme(encoded(json)));
+			assertEquals(opacity, imported.active().opacity);
+			assertEquals(opacity, imported.active().hoverOpacity);
+
+			TestConfig saved = new TestConfig();
+			saved.current().values.put(RightClickStylerConfig.KEY_USER_THEMES, "[" + json + "]");
+			saved.current().values.put(RightClickStylerConfig.KEY_ACTIVE_THEME, "legacy");
+			Theme loaded = manager(saved).active();
+			assertEquals(opacity, loaded.opacity);
+			assertEquals(opacity, loaded.hoverOpacity);
+		}
+	}
+
+	@Test
+	public void independentOpacitiesRoundTripAndSurviveThemeActions()
+	{
+		TestConfig config = new TestConfig();
+		ThemeManager manager = manager(config);
+		manager.applyTheme("glass");
+		assertEquals(40, manager.active().hoverOpacity);
+		assertTrue(manager.saveAsNew("Glass copy"));
+		String glassCopyId = manager.activeId();
+		assertEquals(40, manager.active().opacity);
+		assertEquals(40, manager.active().hoverOpacity);
+
+		manager.setWorking(manager.effectiveTheme().withOpacity(0).withHoverOpacity(80));
+		assertTrue(manager.isEdited());
+		manager.save();
+		assertFalse(manager.isEdited());
+		assertEquals(0, manager.active().opacity);
+		assertEquals(80, manager.active().hoverOpacity);
+		Theme restored = manager(config).active();
+		assertEquals(0, restored.opacity);
+		assertEquals(80, restored.hoverOpacity);
+
+		ThemeManager imported = manager(new TestConfig());
+		assertNull(imported.importTheme(manager.exportWorking()));
+		assertEquals(0, imported.active().opacity);
+		assertEquals(80, imported.active().hoverOpacity);
+		assertTrue(imported.exportWorking().startsWith("rightclickstyler:"));
+
+		manager.setWorking(manager.effectiveTheme().withOpacity(30));
+		assertEquals(80, manager.effectiveTheme().hoverOpacity);
+		manager.revert();
+		assertEquals(0, manager.effectiveTheme().opacity);
+		assertEquals(80, manager.effectiveTheme().hoverOpacity);
+		manager.applyTheme(BuiltInThemes.DEFAULT_ID);
+		assertEquals(100, manager.effectiveTheme().hoverOpacity);
+		manager.applyTheme(glassCopyId);
+		assertEquals(0, manager.effectiveTheme().opacity);
+		assertEquals(80, manager.effectiveTheme().hoverOpacity);
+		config.resetAnnotatedConfiguration();
+		manager.reload();
+		assertEquals(BuiltInThemes.DEFAULT_ID, manager.activeId());
+		manager.applyTheme(glassCopyId);
+		assertEquals(0, manager.effectiveTheme().opacity);
+		assertEquals(80, manager.effectiveTheme().hoverOpacity);
+	}
+
+	@Test
+	public void hoverOpacityIsIndependentInCopiesEqualityAndBuiltIns()
+	{
+		for (Theme builtIn : BuiltInThemes.ALL)
+		{
+			assertEquals(builtIn.name, builtIn.opacity, builtIn.hoverOpacity);
+		}
+		Theme original = BuiltInThemes.find("glass");
+		Theme changedHover = original.withHoverOpacity(75);
+		assertEquals(40, changedHover.opacity);
+		assertEquals(75, changedHover.hoverOpacity);
+		assertEquals(75, changedHover.withOpacity(0).hoverOpacity);
+		assertFalse(original.sameStyle(changedHover));
+		assertNotEquals(original, changedHover);
+		assertEquals(75, changedHover.withBg(Color.BLUE).hoverOpacity);
+	}
+
+	@Test
+	public void importedHoverOpacityClampsAtBothLimits()
+	{
+		for (int[] pair : new int[][]{{-1, 0}, {0, 0}, {100, 100}, {101, 100}})
+		{
+			ThemeManager manager = manager(new TestConfig());
+			String json = "{\"id\":\"hover\",\"opacity\":30,\"hoverOpacity\":" + pair[0] + "}";
+			assertNull(manager.importTheme(encoded(json)));
+			assertEquals(30, manager.active().opacity);
+			assertEquals(pair[1], manager.active().hoverOpacity);
+		}
 	}
 
 	@Test
@@ -133,6 +265,11 @@ public class ThemeManagerTest
 	private static ThemeManager manager(TestConfig config)
 	{
 		return new ThemeManager(config::readThemes, config::write, config, new Gson());
+	}
+
+	private static String encoded(String json)
+	{
+		return Base64.getEncoder().encodeToString(json.getBytes(StandardCharsets.UTF_8));
 	}
 
 	private static final class TestConfig implements RightClickStylerConfig

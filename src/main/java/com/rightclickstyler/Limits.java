@@ -8,7 +8,7 @@ final class Limits
 {
 	static final int MIN_RADIUS = 0;
 	static final int MAX_RADIUS = 8;
-	static final int MIN_OPACITY = 40;
+	static final int MIN_OPACITY = 0;
 	static final int MAX_OPACITY = 100;
 	static final int MIN_FONT_SIZE = 11;
 	static final int MAX_FONT_SIZE = 13;

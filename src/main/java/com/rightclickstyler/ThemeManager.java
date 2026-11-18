@@ -355,7 +355,8 @@ class ThemeManager
 	/**
 	 * Gson-friendly shape for a theme: colours as plain ARGB ints, enums as names. Used for both the
 	 * persisted user theme list and the clipboard export/import format. Boxed fields so that values
-	 * missing from the JSON can be told apart and defaulted from the default built-in theme.
+	 * missing from the JSON can be told apart. Most fields use the default built-in theme;
+	 * legacy hover opacity uses the saved background opacity.
 	 */
 	private static final class StoredTheme
 	{
@@ -370,6 +371,7 @@ class ThemeManager
 		Integer accent;
 		Integer radius;
 		Integer opacity;
+		Integer hoverOpacity;
 		String hoverStyle;
 		Boolean showBorder;
 		Boolean showShadow;
@@ -392,6 +394,7 @@ class ThemeManager
 			s.accent = t.accent.getRGB();
 			s.radius = t.radius;
 			s.opacity = t.opacity;
+			s.hoverOpacity = t.hoverOpacity;
 			s.hoverStyle = t.hoverStyle.name();
 			s.showBorder = t.showBorder;
 			s.showShadow = t.showShadow;
@@ -405,12 +408,17 @@ class ThemeManager
 		Theme toTheme(String themeId)
 		{
 			Theme d = BuiltInThemes.find(BuiltInThemes.DEFAULT_ID);
+			int backgroundOpacity = Limits.clamp(opacity != null ? opacity : d.opacity,
+				Limits.MIN_OPACITY, Limits.MAX_OPACITY);
+			// Older saved and exported themes used one opacity for both fills.
+			int loadedHoverOpacity = Limits.clamp(hoverOpacity != null ? hoverOpacity : backgroundOpacity,
+				Limits.MIN_OPACITY, Limits.MAX_OPACITY);
 			return new Theme(themeId, cleanName(name), false,
 				colour(bg, d.bg), colour(border, d.border), colour(header, d.header),
 				colour(headerText, d.headerText), colour(text, d.text), colour(hover, d.hover),
 				colour(accent, d.accent),
 				Limits.clamp(radius != null ? radius : d.radius, Limits.MIN_RADIUS, Limits.MAX_RADIUS),
-				Limits.clamp(opacity != null ? opacity : d.opacity, Limits.MIN_OPACITY, Limits.MAX_OPACITY),
+				backgroundOpacity, loadedHoverOpacity,
 				enumOr(HoverStyle.class, hoverStyle, d.hoverStyle),
 				showBorder != null ? showBorder : d.showBorder,
 				showShadow != null ? showShadow : d.showShadow,

@@ -21,6 +21,7 @@ final class Theme
 	final Color accent;
 	final int radius;
 	final int opacity;
+	final int hoverOpacity;
 	final HoverStyle hoverStyle;
 	final boolean showBorder;
 	final boolean showShadow;
@@ -31,6 +32,15 @@ final class Theme
 
 	Theme(String id, String name, boolean builtIn, Color bg, Color border, Color header, Color headerText,
 		Color text, Color hover, Color accent, int radius, int opacity, HoverStyle hoverStyle,
+		boolean showBorder, boolean showShadow, boolean showHeader, FontChoice font, int fontSize,
+		boolean textShadow)
+	{
+		this(id, name, builtIn, bg, border, header, headerText, text, hover, accent,
+			radius, opacity, opacity, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, textShadow);
+	}
+
+	Theme(String id, String name, boolean builtIn, Color bg, Color border, Color header, Color headerText,
+		Color text, Color hover, Color accent, int radius, int opacity, int hoverOpacity, HoverStyle hoverStyle,
 		boolean showBorder, boolean showShadow, boolean showHeader, FontChoice font, int fontSize,
 		boolean textShadow)
 	{
@@ -46,6 +56,7 @@ final class Theme
 		this.accent = accent;
 		this.radius = radius;
 		this.opacity = opacity;
+		this.hoverOpacity = hoverOpacity;
 		this.hoverStyle = hoverStyle;
 		this.showBorder = showBorder;
 		this.showShadow = showShadow;
@@ -58,103 +69,109 @@ final class Theme
 	Theme withIdentity(String id, String name, boolean builtIn)
 	{
 		return new Theme(id, name, builtIn, bg, border, header, headerText, text, hover, accent,
-			radius, opacity, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, textShadow);
+			radius, opacity, hoverOpacity, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, textShadow);
 	}
 
 	Theme withBg(Color v)
 	{
 		return new Theme(id, name, builtIn, v, border, header, headerText, text, hover, accent,
-			radius, opacity, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, textShadow);
+			radius, opacity, hoverOpacity, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, textShadow);
 	}
 
 	Theme withBorder(Color v)
 	{
 		return new Theme(id, name, builtIn, bg, v, header, headerText, text, hover, accent,
-			radius, opacity, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, textShadow);
+			radius, opacity, hoverOpacity, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, textShadow);
 	}
 
 	Theme withHeader(Color v)
 	{
 		return new Theme(id, name, builtIn, bg, border, v, headerText, text, hover, accent,
-			radius, opacity, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, textShadow);
+			radius, opacity, hoverOpacity, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, textShadow);
 	}
 
 	Theme withHeaderText(Color v)
 	{
 		return new Theme(id, name, builtIn, bg, border, header, v, text, hover, accent,
-			radius, opacity, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, textShadow);
+			radius, opacity, hoverOpacity, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, textShadow);
 	}
 
 	Theme withText(Color v)
 	{
 		return new Theme(id, name, builtIn, bg, border, header, headerText, v, hover, accent,
-			radius, opacity, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, textShadow);
+			radius, opacity, hoverOpacity, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, textShadow);
 	}
 
 	Theme withHover(Color v)
 	{
 		return new Theme(id, name, builtIn, bg, border, header, headerText, text, v, accent,
-			radius, opacity, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, textShadow);
+			radius, opacity, hoverOpacity, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, textShadow);
 	}
 
 	Theme withAccent(Color v)
 	{
 		return new Theme(id, name, builtIn, bg, border, header, headerText, text, hover, v,
-			radius, opacity, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, textShadow);
+			radius, opacity, hoverOpacity, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, textShadow);
 	}
 
 	Theme withRadius(int v)
 	{
 		return new Theme(id, name, builtIn, bg, border, header, headerText, text, hover, accent,
-			v, opacity, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, textShadow);
+			v, opacity, hoverOpacity, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, textShadow);
 	}
 
 	Theme withOpacity(int v)
 	{
 		return new Theme(id, name, builtIn, bg, border, header, headerText, text, hover, accent,
-			radius, v, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, textShadow);
+			radius, v, hoverOpacity, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, textShadow);
+	}
+
+	Theme withHoverOpacity(int v)
+	{
+		return new Theme(id, name, builtIn, bg, border, header, headerText, text, hover, accent,
+			radius, opacity, v, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, textShadow);
 	}
 
 	Theme withHoverStyle(HoverStyle v)
 	{
 		return new Theme(id, name, builtIn, bg, border, header, headerText, text, hover, accent,
-			radius, opacity, v, showBorder, showShadow, showHeader, font, fontSize, textShadow);
+			radius, opacity, hoverOpacity, v, showBorder, showShadow, showHeader, font, fontSize, textShadow);
 	}
 
 	Theme withShowBorder(boolean v)
 	{
 		return new Theme(id, name, builtIn, bg, border, header, headerText, text, hover, accent,
-			radius, opacity, hoverStyle, v, showShadow, showHeader, font, fontSize, textShadow);
+			radius, opacity, hoverOpacity, hoverStyle, v, showShadow, showHeader, font, fontSize, textShadow);
 	}
 
 	Theme withShowShadow(boolean v)
 	{
 		return new Theme(id, name, builtIn, bg, border, header, headerText, text, hover, accent,
-			radius, opacity, hoverStyle, showBorder, v, showHeader, font, fontSize, textShadow);
+			radius, opacity, hoverOpacity, hoverStyle, showBorder, v, showHeader, font, fontSize, textShadow);
 	}
 
 	Theme withShowHeader(boolean v)
 	{
 		return new Theme(id, name, builtIn, bg, border, header, headerText, text, hover, accent,
-			radius, opacity, hoverStyle, showBorder, showShadow, v, font, fontSize, textShadow);
+			radius, opacity, hoverOpacity, hoverStyle, showBorder, showShadow, v, font, fontSize, textShadow);
 	}
 
 	Theme withFont(FontChoice v)
 	{
 		return new Theme(id, name, builtIn, bg, border, header, headerText, text, hover, accent,
-			radius, opacity, hoverStyle, showBorder, showShadow, showHeader, v, fontSize, textShadow);
+			radius, opacity, hoverOpacity, hoverStyle, showBorder, showShadow, showHeader, v, fontSize, textShadow);
 	}
 
 	Theme withFontSize(int v)
 	{
 		return new Theme(id, name, builtIn, bg, border, header, headerText, text, hover, accent,
-			radius, opacity, hoverStyle, showBorder, showShadow, showHeader, font, v, textShadow);
+			radius, opacity, hoverOpacity, hoverStyle, showBorder, showShadow, showHeader, font, v, textShadow);
 	}
 
 	Theme withTextShadow(boolean v)
 	{
 		return new Theme(id, name, builtIn, bg, border, header, headerText, text, hover, accent,
-			radius, opacity, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, v);
+			radius, opacity, hoverOpacity, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, v);
 	}
 
 	/**
@@ -166,6 +183,7 @@ final class Theme
 		return bg.equals(o.bg) && border.equals(o.border) && header.equals(o.header)
 			&& headerText.equals(o.headerText) && text.equals(o.text) && hover.equals(o.hover)
 			&& accent.equals(o.accent) && radius == o.radius && opacity == o.opacity
+			&& hoverOpacity == o.hoverOpacity
 			&& hoverStyle == o.hoverStyle && showBorder == o.showBorder && showShadow == o.showShadow
 			&& showHeader == o.showHeader && font == o.font && fontSize == o.fontSize
 			&& textShadow == o.textShadow;
@@ -190,6 +208,6 @@ final class Theme
 	public int hashCode()
 	{
 		return Objects.hash(id, name, builtIn, bg, border, header, headerText, text, hover, accent,
-			radius, opacity, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, textShadow);
+			radius, opacity, hoverOpacity, hoverStyle, showBorder, showShadow, showHeader, font, fontSize, textShadow);
 	}
 }

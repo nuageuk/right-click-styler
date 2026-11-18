@@ -3,13 +3,18 @@ package com.rightclickstyler;
 import com.google.inject.Provides;
 import javax.inject.Inject;
 import javax.swing.SwingUtilities;
+import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.Menu;
+import net.runelite.api.MenuEntry;
 import net.runelite.api.Player;
+import net.runelite.api.Point;
 import net.runelite.api.events.BeforeMenuRender;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
+import net.runelite.api.events.MenuOpened;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.config.RuneLiteConfig;
@@ -23,6 +28,7 @@ import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.ui.overlay.OverlayManager;
 import net.runelite.client.util.ImageUtil;
 
+@Slf4j
 @PluginDescriptor(
 	name = RightClickStylerPlugin.NAME
 )
@@ -38,6 +44,10 @@ public class RightClickStylerPlugin extends Plugin
 	private static final String INTERFACE_STYLES_WARNING = NAME
 		+ ": turn off Interface Styles' High detail menu and set its Menu alpha to 255.";
 	private static final int NAV_PRIORITY = 5;
+	private static final boolean SUBMENU_PROTOTYPE =
+		!"false".equals(System.getProperty("rightclickstyler.submenuPrototype"));
+	private static final boolean SUBMENU_TRACE = Boolean.getBoolean("rightclickstyler.submenuTrace");
+	private static final int MAX_ROUTE_DIAGNOSTICS = 64;
 
 	@Inject
 	private Client client;
@@ -76,6 +86,9 @@ public class RightClickStylerPlugin extends Plugin
 	// reset in shutDown.
 	private volatile boolean warnedAboutInterfaceStylesConflict;
 	private volatile boolean running;
+	private boolean preparingPrototype;
+	private int routeDiagnostics;
+	private int lastRouteSignature;
 
 	@Override
 	protected void startUp()
@@ -93,6 +106,8 @@ public class RightClickStylerPlugin extends Plugin
 		updateSidebarButton();
 
 		menuOverlay.resetFailure();
+		routeDiagnostics = 0;
+		lastRouteSignature = 0;
 		overlayManager.add(menuOverlay);
 
 		updateInterfaceStylesWarning();
@@ -103,6 +118,7 @@ public class RightClickStylerPlugin extends Plugin
 	protected void shutDown()
 	{
 		running = false;
+		menuOverlay.clearPrepared();
 		overlayManager.remove(menuOverlay);
 		if (navigationButton != null)
 		{
@@ -118,10 +134,139 @@ public class RightClickStylerPlugin extends Plugin
 	@Subscribe
 	public void onBeforeMenuRender(BeforeMenuRender event)
 	{
+		menuOverlay.setExternallyConsumed(event.isConsumed());
+		if (event.isConsumed())
+		{
+			traceUnstyledEvent("already consumed");
+			menuOverlay.discardPreparedAtEventStart();
+			menuOverlay.invalidateSubmenuShadow();
+			return;
+		}
+		if (SUBMENU_PROTOTYPE && handleSubmenuPrototype(event))
+		{
+			return;
+		}
 		if (menuOverlay.shouldDraw())
 		{
 			event.consume();
 		}
+		else
+		{
+			traceUnstyledEvent("plain renderer declined");
+		}
+	}
+
+	/** Bounded, opt-in evidence for frames rejected before the submenu probe can report them. */
+	private void traceUnstyledEvent(String reason)
+	{
+		if (!SUBMENU_TRACE || routeDiagnostics >= MAX_ROUTE_DIAGNOSTICS)
+		{
+			return;
+		}
+		try
+		{
+			if (!client.isMenuOpen())
+			{
+				return;
+			}
+			Menu root = client.getMenu();
+			if (root == null)
+			{
+				return;
+			}
+			MenuEntry[] entries = root.getMenuEntries();
+			int children = 0;
+			if (entries != null)
+			{
+				for (MenuEntry entry : entries)
+				{
+					if (entry != null && entry.getSubMenu() != null)
+					{
+						children++;
+					}
+				}
+			}
+			boolean scrollable = client.isMenuScrollable();
+			int scroll = scrollable ? client.getMenuScroll() : 0;
+			int signature = reason.hashCode();
+			signature = 31 * signature + (scrollable ? 1 : 0);
+			signature = 31 * signature + scroll;
+			signature = 31 * signature + (entries == null ? -1 : entries.length);
+			signature = 31 * signature + children;
+			signature = 31 * signature + root.getMenuWidth();
+			signature = 31 * signature + root.getMenuHeight();
+			if (signature == lastRouteSignature)
+			{
+				return;
+			}
+			lastRouteSignature = signature;
+			routeDiagnostics++;
+			log.info("Menu render route skipped reason={} prototype={} scrollable={} scroll={} entries={} children={} root=({},{} {}x{}) diagnostic={}/{}",
+				reason, SUBMENU_PROTOTYPE, scrollable, scroll, entries == null ? -1 : entries.length,
+				children, root.getMenuX(), root.getMenuY(), root.getMenuWidth(), root.getMenuHeight(),
+				routeDiagnostics, MAX_ROUTE_DIAGNOSTICS);
+		}
+		catch (RuntimeException ignored)
+		{
+			// Diagnostics must never affect native fallback or event ownership.
+		}
+	}
+
+	/** @return true when the opt-in submenu prototype owns this event. */
+	boolean handleSubmenuPrototype(BeforeMenuRender event)
+	{
+		if (preparingPrototype)
+		{
+			menuOverlay.recordReentrantEvent();
+			return true;
+		}
+		// The only mouse read for this frame. getMouseCanvasPosition follows the AWT thread
+		// live, while native submenu state is fixed for the cycle, so preparation and the
+		// final draw both use this sample instead of re-reading the pointer.
+		Point frameMouse = client.getMouseCanvasPosition();
+		menuOverlay.discardPreparedAtEventStart();
+		if (!client.isMenuOpen())
+		{
+			menuOverlay.invalidateSubmenuShadow();
+			return false;
+		}
+		Menu root = client.getMenu();
+		MenuEntry[] entries = root == null ? null : root.getMenuEntries();
+		if (entries == null
+			|| !(MenuOverlay.containsSubMenu(entries) || client.isMenuScrollable()))
+		{
+			menuOverlay.invalidateSubmenuShadow();
+			return false;
+		}
+		if (event.isConsumed())
+		{
+			menuOverlay.invalidateSubmenuShadow();
+			menuOverlay.recordAlreadyConsumedSubmenu();
+			return true;
+		}
+		preparingPrototype = true;
+		try
+		{
+			if (menuOverlay.prepareSubmenuFrame(root, entries, frameMouse))
+			{
+				// A late structural change or overlay draw failure can leave this
+				// consumed frame blank. Only a later menu event can choose
+				// native fallback; this frame cannot be restored.
+				event.consume();
+				menuOverlay.recordSubmenuConsumed();
+			}
+		}
+		finally
+		{
+			preparingPrototype = false;
+		}
+		return true;
+	}
+
+	@Subscribe
+	public void onMenuOpened(MenuOpened event)
+	{
+		menuOverlay.menuOpened();
 	}
 
 	// Polled each tick so level-ups reach the preview; this also covers login, where the local player
@@ -129,6 +274,12 @@ public class RightClickStylerPlugin extends Plugin
 	@Subscribe
 	public void onGameTick(GameTick event)
 	{
+		if (SUBMENU_PROTOTYPE && Boolean.getBoolean("rightclickstyler.submenuTrace"))
+		{
+			menuOverlay.reportPrototype();
+		}
+		// Diagnostic, opt-in; independent of the prototype so both modes can be measured.
+		menuOverlay.reportPerf();
 		Player player = client.getLocalPlayer();
 		if (player != null)
 		{

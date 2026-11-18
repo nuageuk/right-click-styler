@@ -49,10 +49,14 @@ final class MenuRenderer
 
 	private static final String HEADER_TEXT = "Choose Option";
 	private static final Color DEFAULT_TAG_COLOUR = Color.YELLOW;
+	private static final Color NATIVE_ITEM_COLOUR = new Color(0xFF9040);
+	private static final Color NATIVE_OBJECT_COLOUR = Color.CYAN;
 	private static final Color TEXT_SHADOW_COLOUR = Color.BLACK;
 	private static final Color HIT_ROW_COLOUR = Color.MAGENTA;
 	private static final int TEXT_SHADOW_OFFSET = 1;
 	private static final int ICON_GAP = 1;
+	private static final int TEXT_EDGE_PADDING = 4;
+	private static final String ELLIPSIS = "...";
 	private static final int HOVER_BAR_WIDTH = 3;
 	private static final int OUTLINE_INSET = 1;
 	private static final int MAX_ENTRY_LENGTH = 512;
@@ -94,6 +98,7 @@ final class MenuRenderer
 
 	// Set by prepare() for the current call; shared by drawing and measuring.
 	private Client client;
+	private Object modIconSource;
 	private FontMetrics metrics;
 	private FontMetrics highlightMetrics;
 	private Map<String, Color> rules;
@@ -107,13 +112,40 @@ final class MenuRenderer
 	void render(Graphics2D graphics, Client client, Theme theme, RightClickStylerConfig config,
 		List<Row> rows, Rectangle bounds, int hoverIndex, int localCombatLevel)
 	{
+		render(graphics, client, theme, config, rows, bounds, hoverIndex, localCombatLevel, HEADER_TEXT);
+	}
+
+	void render(Graphics2D graphics, Client client, Theme theme, RightClickStylerConfig config,
+		List<Row> rows, Rectangle bounds, int hoverIndex, int localCombatLevel, String headerText)
+	{
+		render(graphics, client, theme, config, rows, bounds, hoverIndex,
+			localCombatLevel, headerText, 0);
+	}
+
+	void render(Graphics2D graphics, Client client, Theme theme, RightClickStylerConfig config,
+		List<Row> rows, Rectangle bounds, int hoverIndex, int localCombatLevel,
+		String headerText, int scrollRows)
+	{
+		render(graphics, client, theme, config, rows, bounds, hoverIndex,
+			localCombatLevel, headerText, null, scrollRows);
+	}
+
+	/**
+	 * @param headerKind the target kind of a header that repeats the opening row's target, so
+	 * its native target colour follows Custom target colours like that row; null for any other
+	 * header, whose tags are drawn as written
+	 */
+	void render(Graphics2D graphics, Client client, Theme theme, RightClickStylerConfig config,
+		List<Row> rows, Rectangle bounds, int hoverIndex, int localCombatLevel,
+		String headerText, TargetKind headerKind, int scrollRows)
+	{
 		// Work on a copy so no colour/font/clip change leaks to other overlays or Swing children.
 		Graphics2D g = (Graphics2D) graphics.create();
 		try
 		{
 			prepare(g, client, theme, config);
 			targetColours.load(config, localCombatLevel);
-			renderMenu(g, config, rows, bounds, hoverIndex);
+			renderMenu(g, config, rows, bounds, hoverIndex, headerText, headerKind, scrollRows);
 		}
 		finally
 		{
@@ -139,7 +171,14 @@ final class MenuRenderer
 			int alpha = (int) Math.round(theme.opacity * MAX_ALPHA / PERCENT);
 			bgColour = ColorUtil.colorWithAlpha(theme.bg, alpha);
 			headerColour = ColorUtil.colorWithAlpha(theme.header, alpha);
-			hoverColour = ColorUtil.colorWithAlpha(theme.hover, alpha);
+			hoverColour = ColorUtil.colorWithAlpha(theme.hover,
+				(int) Math.round(theme.hoverOpacity * MAX_ALPHA / PERCENT));
+		}
+		Object currentIcons = client == null ? null : client.getModIcons();
+		if (currentIcons != modIconSource)
+		{
+			modIconCache.clear();
+			modIconSource = currentIcons;
 		}
 		this.client = client;
 		metrics = graphics.getFontMetrics(font);
@@ -157,7 +196,7 @@ final class MenuRenderer
 	}
 
 	private void renderMenu(Graphics2D graphics, RightClickStylerConfig config, List<Row> rows, Rectangle bounds,
-		int hoverIndex)
+		int hoverIndex, String headerText, TargetKind headerKind, int scrollRows)
 	{
 		int baselineNudge = Limits.baselineNudge(config);
 
@@ -178,27 +217,38 @@ final class MenuRenderer
 		graphics.clip(shape);
 		if (theme.showHeader)
 		{
+			// Header and hover fills use source-over on the menu background. Each
+			// fill's alpha compounds with the background where they overlap.
 			graphics.setColor(headerColour);
 			graphics.fillRect(bounds.x, bounds.y, bounds.width, HEADER_HEIGHT);
 			graphics.setFont(font);
-			drawRun(graphics, metrics, HEADER_TEXT, bounds.x + textOffsetX,
-				bounds.y + centreOffset(HEADER_HEIGHT, baselineNudge), theme.headerText);
+			int inset = Math.max(Math.max(TEXT_EDGE_PADDING, textOffsetX), theme.radius / 2 + 2);
+			drawHeader(graphics, headerText == null ? HEADER_TEXT : headerText,
+				headerText == null ? null : headerKind,
+				bounds.x + inset, bounds.x + bounds.width - inset - TEXT_SHADOW_OFFSET,
+				bounds.y + centreOffset(HEADER_HEIGHT, baselineNudge));
 		}
-		drawRows(graphics, config, rows, bounds, hoverIndex, bounds.y + HEADER_HEIGHT, baselineNudge);
+		drawRows(graphics, config, rows, bounds, hoverIndex,
+			bounds.y + HEADER_HEIGHT, baselineNudge, scrollRows);
 		graphics.setClip(previousClip);
 
 		drawBorder(graphics, box);
 	}
 
 	private void drawRows(Graphics2D graphics, RightClickStylerConfig config, List<Row> rows, Rectangle bounds,
-		int hoverIndex, int firstRowY, int baselineNudge)
+		int hoverIndex, int firstRowY, int baselineNudge, int scrollRows)
 	{
 		boolean showHitRows = config.showHitRows();
 		int rowTextOffsetY = centreOffset(ROW_HEIGHT, baselineNudge);
+		Rectangle visible = graphics.getClipBounds();
 
-		for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++)
+		for (int rowIndex = scrollRows; rowIndex < rows.size(); rowIndex++)
 		{
-			int rowY = firstRowY + rowIndex * ROW_HEIGHT;
+			int rowY = firstRowY + (rowIndex - scrollRows) * ROW_HEIGHT;
+			if (visible != null && rowY >= visible.y + visible.height)
+			{
+				break;
+			}
 			boolean hovered = rowIndex == hoverIndex;
 			if (hovered)
 			{
@@ -209,8 +259,22 @@ final class MenuRenderer
 				graphics.setColor(HIT_ROW_COLOUR);
 				graphics.drawRect(bounds.x, rowY, bounds.width - 1, ROW_HEIGHT - 1);
 			}
-			layoutRow(graphics, rows.get(rowIndex), bounds.x + textOffsetX, rowY + rowTextOffsetY,
-				bounds.x + bounds.width, hovered);
+			Row row = rows.get(rowIndex);
+			int startX = bounds.x + textOffsetX + (row.hasSubMenu && row.submenuOpensLeft ? 16 : 0);
+			int rightPadding = row.hasSubMenu && !row.submenuOpensLeft ? 17 : TEXT_EDGE_PADDING;
+			layoutRow(graphics, row, startX, rowY + rowTextOffsetY,
+				bounds.x + bounds.width - Math.max(rightPadding, textOffsetX)
+					- TEXT_SHADOW_OFFSET, hovered);
+			if (row.hasSubMenu)
+			{
+				boolean left = row.submenuOpensLeft;
+				int arrowX = left ? bounds.x + 9 : bounds.x + bounds.width - 9;
+				int arrowY = rowY + ROW_HEIGHT / 2;
+				graphics.setColor(hovered ? theme.accent : theme.text);
+				int tipX = arrowX + (left ? -4 : 4);
+				graphics.drawLine(arrowX, arrowY - 4, tipX, arrowY);
+				graphics.drawLine(tipX, arrowY, arrowX, arrowY + 4);
+			}
 		}
 	}
 
@@ -230,15 +294,29 @@ final class MenuRenderer
 		}
 
 		int x = startX;
-		if (hovered && theme.hoverStyle == HoverStyle.TEXT)
+		boolean optionVisible = !option.plain.trim().isEmpty();
+		if (!optionVisible)
 		{
-			x += drawRun(graphics, optionMetrics, option.plain, x, textY, theme.accent);
+			for (Run run : option.runs)
+			{
+				if (run.iconIndex >= 0)
+				{
+					optionVisible = true;
+					break;
+				}
+			}
 		}
-		else if (highlight != null)
+		if (optionVisible && hovered && theme.hoverStyle == HoverStyle.TEXT)
 		{
-			x += drawRun(graphics, optionMetrics, option.plain, x, textY, highlight);
+			x += drawFittedRun(graphics, optionMetrics, option.plain, x, textY,
+				theme.accent, maxX);
 		}
-		else
+		else if (optionVisible && highlight != null)
+		{
+			x += drawFittedRun(graphics, optionMetrics, option.plain, x, textY,
+				highlight, maxX);
+		}
+		else if (optionVisible)
 		{
 			List<Run> runs = option.runs;
 			for (int i = 0; i < runs.size(); i++)
@@ -248,10 +326,20 @@ final class MenuRenderer
 					return x;
 				}
 				Run run = runs.get(i);
-				x += run.iconIndex >= 0
-					? drawIcon(graphics, optionMetrics, run.iconIndex, x, textY)
-					: drawRun(graphics, optionMetrics, run.text, x, textY,
-						run.tagColour != null ? run.tagColour : theme.text);
+				if (run.iconIndex >= 0)
+				{
+					int iconWidth = drawIcon(null, optionMetrics, run.iconIndex, x, textY);
+					if (x + iconWidth > maxX)
+					{
+						return maxX;
+					}
+					x += drawIcon(graphics, optionMetrics, run.iconIndex, x, textY);
+				}
+				else
+				{
+					x += drawFittedRun(graphics, optionMetrics, run.text, x, textY,
+						run.tagColour != null ? run.tagColour : theme.text, maxX);
+				}
 			}
 		}
 
@@ -263,7 +351,11 @@ final class MenuRenderer
 		{
 			graphics.setFont(font);
 		}
-		x += metrics.charWidth(' ');
+		boolean targetOnly = x == startX;
+		if (!targetOnly)
+		{
+			x += metrics.charWidth(' ');
+		}
 		List<Run> runs = targetRuns(row.target);
 		for (int i = 0; i < runs.size(); i++)
 		{
@@ -274,11 +366,23 @@ final class MenuRenderer
 			Run run = runs.get(i);
 			if (run.iconIndex >= 0)
 			{
+				int iconWidth = drawIcon(null, metrics, run.iconIndex, x, textY);
+				if (x + iconWidth > maxX)
+				{
+					return maxX;
+				}
 				x += drawIcon(graphics, metrics, run.iconIndex, x, textY);
+				targetOnly = false;
+				continue;
+			}
+			String text = targetOnly ? run.text.stripLeading() : run.text;
+			if (text.isEmpty())
+			{
 				continue;
 			}
 			Color colour = graphics != null ? targetColours.resolve(run, row.kind) : null;
-			x += drawRun(graphics, metrics, run.text, x, textY, colour);
+			x += drawFittedRun(graphics, metrics, text, x, textY, colour, maxX);
+			targetOnly = false;
 		}
 		return x;
 	}
@@ -370,6 +474,121 @@ final class MenuRenderer
 	private int centreOffset(int boxHeight, int nudge)
 	{
 		return (boxHeight - (metrics.getAscent() + metrics.getDescent())) / 2 + metrics.getAscent() + nudge;
+	}
+
+	private void drawHeader(Graphics2D graphics, String raw, TargetKind kind, int startX, int maxX, int y)
+	{
+		if (raw.isEmpty() || startX >= maxX)
+		{
+			return;
+		}
+		List<Run> runs = optionSegments(raw).runs;
+		int fullWidth = 0;
+		for (Run run : runs)
+		{
+			fullWidth += run.iconIndex >= 0
+				? drawIcon(null, metrics, run.iconIndex, 0, 0)
+				: metrics.stringWidth(run.text);
+		}
+		int available = maxX - startX;
+		boolean truncated = fullWidth > available;
+		int ellipsisWidth = metrics.stringWidth(ELLIPSIS);
+		if (truncated && ellipsisWidth > available)
+		{
+			return;
+		}
+		int contentMax = truncated ? maxX - ellipsisWidth : maxX;
+		int x = startX;
+		for (Run run : runs)
+		{
+			if (x >= contentMax)
+			{
+				break;
+			}
+			if (run.iconIndex >= 0)
+			{
+				int iconWidth = drawIcon(null, metrics, run.iconIndex, x, y);
+				if (x + iconWidth > contentMax)
+				{
+					break;
+				}
+				x += drawIcon(graphics, metrics, run.iconIndex, x, y);
+				continue;
+			}
+			String visible = fitPrefix(run.text, metrics, contentMax - x);
+			x += drawRun(graphics, metrics, visible, x, y, headerRunColour(run, kind));
+			if (visible.length() < run.text.length())
+			{
+				break;
+			}
+		}
+		if (truncated)
+		{
+			drawRun(graphics, metrics, ELLIPSIS, x, y, theme.headerText);
+		}
+	}
+
+	/**
+	 * A target-derived header colours its tagged spans exactly as the opening row's target does,
+	 * so a Custom target colour also reaches it. Untagged text, and every header that is not
+	 * target text, keeps the header colour or its own tag.
+	 */
+	private Color headerRunColour(Run run, TargetKind kind)
+	{
+		if (run.tagColour == null)
+		{
+			return theme.headerText;
+		}
+		return kind == null ? run.tagColour : targetColours.resolve(run, kind);
+	}
+
+	private int drawFittedRun(Graphics2D graphics, FontMetrics fontMetrics,
+		String text, int x, int y, Color colour, int maxX)
+	{
+		int available = maxX - x;
+		if (text.isEmpty() || available <= 0)
+		{
+			return 0;
+		}
+		if (fontMetrics.stringWidth(text) <= available)
+		{
+			return drawRun(graphics, fontMetrics, text, x, y, colour);
+		}
+		int ellipsisWidth = fontMetrics.stringWidth(ELLIPSIS);
+		if (ellipsisWidth <= available)
+		{
+			String visible = fitPrefix(text, fontMetrics, available - ellipsisWidth);
+			drawRun(graphics, fontMetrics, visible + ELLIPSIS, x, y, colour);
+		}
+		return available;
+	}
+
+	private static String fitPrefix(String text, FontMetrics fontMetrics, int maxWidth)
+	{
+		if (maxWidth <= 0)
+		{
+			return "";
+		}
+		if (fontMetrics.stringWidth(text) <= maxWidth)
+		{
+			return text;
+		}
+		int low = 0;
+		int high = text.codePointCount(0, text.length());
+		while (low < high)
+		{
+			int middle = (low + high + 1) >>> 1;
+			int end = text.offsetByCodePoints(0, middle);
+			if (fontMetrics.stringWidth(text.substring(0, end)) <= maxWidth)
+			{
+				low = middle;
+			}
+			else
+			{
+				high = middle - 1;
+			}
+		}
+		return text.substring(0, text.offsetByCodePoints(0, low));
 	}
 
 	/**
@@ -536,11 +755,15 @@ final class MenuRenderer
 		Matcher matcher = TAG.matcher(raw);
 		int last = 0;
 		Color current = null;
+		int colourSpan = -1;
+		boolean uncolouredPrefix = false;
 		while (matcher.find())
 		{
 			if (matcher.start() > last)
 			{
-				runs.add(new Run(collapse(raw.substring(last, matcher.start())), current));
+				String text = collapse(raw.substring(last, matcher.start()));
+				runs.add(new Run(text, current, colourSpan));
+				uncolouredPrefix |= colourSpan < 0 && !text.trim().isEmpty();
 			}
 			last = matcher.end();
 
@@ -550,6 +773,7 @@ final class MenuRenderer
 			if (col.matches())
 			{
 				current = new Color(Integer.parseInt(col.group(1), 16));
+				colourSpan = colourSpan < 0 && uncolouredPrefix ? 1 : colourSpan + 1;
 			}
 			else if (inner.equalsIgnoreCase(CLOSE_COL))
 			{
@@ -562,7 +786,7 @@ final class MenuRenderer
 		}
 		if (last < raw.length())
 		{
-			runs.add(new Run(collapse(raw.substring(last)), current));
+			runs.add(new Run(collapse(raw.substring(last)), current, colourSpan));
 		}
 		return runs;
 	}
@@ -585,9 +809,10 @@ final class MenuRenderer
 		{
 			if (matcher.start() > last)
 			{
-				out.add(new Run(run.text.substring(last, matcher.start()), run.tagColour));
+				out.add(new Run(run.text.substring(last, matcher.start()), run.tagColour, run.colourSpan));
 			}
-			out.add(new Run(matcher.group(), run.tagColour, true, Integer.parseInt(matcher.group(1)), -1));
+			out.add(new Run(matcher.group(), run.tagColour, run.colourSpan,
+				true, Integer.parseInt(matcher.group(1)), -1));
 			last = matcher.end();
 		}
 		if (last == 0)
@@ -596,7 +821,7 @@ final class MenuRenderer
 		}
 		else if (last < run.text.length())
 		{
-			out.add(new Run(run.text.substring(last), run.tagColour));
+			out.add(new Run(run.text.substring(last), run.tagColour, run.colourSpan));
 		}
 	}
 
@@ -621,6 +846,8 @@ final class MenuRenderer
 		private String option;
 		private String target;
 		private TargetKind kind;
+		private boolean hasSubMenu;
+		private boolean submenuOpensLeft;
 
 		Row(String option, String target, TargetKind kind)
 		{
@@ -636,6 +863,37 @@ final class MenuRenderer
 			this.option = option;
 			this.target = target;
 			this.kind = kind;
+			this.hasSubMenu = false;
+			this.submenuOpensLeft = false;
+		}
+
+		void set(String option, String target, TargetKind kind, boolean hasSubMenu, boolean opensLeft)
+		{
+			set(option, target, kind);
+			this.hasSubMenu = hasSubMenu;
+			this.submenuOpensLeft = opensLeft;
+		}
+
+		// Read by the prototype image cache, whose key is exactly what a row draws.
+		String option()
+		{
+			return option;
+		}
+
+		String target()
+		{
+			return target;
+		}
+
+		TargetKind kind()
+		{
+			return kind;
+		}
+
+		/** Kind, submenu arrow and arrow side, packed for comparison. */
+		int flags()
+		{
+			return (kind == null ? 7 : kind.ordinal()) << 2 | (hasSubMenu ? 2 : 0) | (submenuOpensLeft ? 1 : 0);
 		}
 	}
 
@@ -701,6 +959,13 @@ final class MenuRenderer
 			{
 				return tagColour;
 			}
+			// Native target tags are the category defaults. A different colour, or a
+			// later span within the target, is intentional formatting to preserve.
+			if (run.tagColour != null && (run.colourSpan > 0
+				|| !isNativeTargetColour(run.tagColour, kind)))
+			{
+				return run.tagColour;
+			}
 			switch (kind)
 			{
 				case NPC:
@@ -714,6 +979,24 @@ final class MenuRenderer
 				case OTHER:
 				default:
 					return orDefault(other, tagColour);
+			}
+		}
+
+		private static boolean isNativeTargetColour(Color colour, TargetKind kind)
+		{
+			switch (kind)
+			{
+				case NPC:
+					return DEFAULT_TAG_COLOUR.equals(colour);
+				case PLAYER:
+					return Color.WHITE.equals(colour);
+				case ITEM:
+					return NATIVE_ITEM_COLOUR.equals(colour);
+				case OBJECT:
+					return NATIVE_OBJECT_COLOUR.equals(colour);
+				case OTHER:
+				default:
+					return DEFAULT_TAG_COLOUR.equals(colour) || Color.WHITE.equals(colour);
 			}
 		}
 
@@ -741,19 +1024,21 @@ final class MenuRenderer
 	{
 		private final String text;
 		private final Color tagColour;
+		private final int colourSpan;
 		private final boolean isLevel;
 		private final int level;
 		private final int iconIndex;
 
-		private Run(String text, Color tagColour)
+		private Run(String text, Color tagColour, int colourSpan)
 		{
-			this(text, tagColour, false, 0, -1);
+			this(text, tagColour, colourSpan, false, 0, -1);
 		}
 
-		private Run(String text, Color tagColour, boolean isLevel, int level, int iconIndex)
+		private Run(String text, Color tagColour, int colourSpan, boolean isLevel, int level, int iconIndex)
 		{
 			this.text = text;
 			this.tagColour = tagColour;
+			this.colourSpan = colourSpan;
 			this.isLevel = isLevel;
 			this.level = level;
 			this.iconIndex = iconIndex;
@@ -761,7 +1046,7 @@ final class MenuRenderer
 
 		private static Run icon(int index)
 		{
-			return new Run("", null, false, 0, index);
+			return new Run("", null, -1, false, 0, index);
 		}
 	}
 }

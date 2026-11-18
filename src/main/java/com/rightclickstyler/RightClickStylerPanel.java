@@ -5,6 +5,7 @@ import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.GridLayout;
+import java.awt.Graphics;
 import java.awt.Insets;
 import java.awt.Toolkit;
 import java.awt.datatransfer.Clipboard;
@@ -30,6 +31,7 @@ import java.util.function.Supplier;
 import javax.inject.Inject;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListCellRenderer;
+import javax.swing.Icon;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
@@ -63,6 +65,39 @@ import net.runelite.client.util.ColorUtil;
  */
 class RightClickStylerPanel extends PluginPanel
 {
+	/** Font-independent built-in marker for theme lists whose current font lacks the lock emoji. */
+	private static final Icon BUILT_IN_LOCK_ICON = new Icon()
+	{
+		@Override
+		public void paintIcon(Component component, Graphics graphics, int x, int y)
+		{
+			Graphics g = graphics.create();
+			try
+			{
+				g.setColor(component.getForeground());
+				g.drawArc(x + 3, y + 1, 6, 8, 0, 180);
+				g.drawLine(x + 3, y + 5, x + 3, y + 7);
+				g.drawLine(x + 9, y + 5, x + 9, y + 7);
+				g.fillRoundRect(x + 2, y + 7, 9, 6, 2, 2);
+			}
+			finally
+			{
+				g.dispose();
+			}
+		}
+
+		@Override
+		public int getIconWidth()
+		{
+			return 13;
+		}
+
+		@Override
+		public int getIconHeight()
+		{
+			return 14;
+		}
+	};
 	private static final int ROW_GAP = 4;
 	private static final int SPINNER_COLUMNS = 4;
 	private static final int FIELD_PADDING = 4;
@@ -98,6 +133,13 @@ class RightClickStylerPanel extends PluginPanel
 		RightClickStylerConfig.KEY_TEXT_OFFSET_X,
 		RightClickStylerConfig.KEY_BASELINE_NUDGE,
 		RightClickStylerConfig.KEY_SHOW_HIT_ROWS
+	};
+	private static final String[] TARGET_COLOUR_KEYS = {
+		RightClickStylerConfig.KEY_NPC_COLOUR,
+		RightClickStylerConfig.KEY_PLAYER_COLOUR,
+		RightClickStylerConfig.KEY_ITEM_COLOUR,
+		RightClickStylerConfig.KEY_OBJECT_COLOUR,
+		RightClickStylerConfig.KEY_OTHER_COLOUR
 	};
 	private static final Consumer<Color> NOTHING = c ->
 	{
@@ -335,8 +377,11 @@ class RightClickStylerPanel extends PluginPanel
 			{
 				putClientProperty("html.disable", Boolean.TRUE);
 				Theme theme = value instanceof Theme ? (Theme) value : null;
-				String text = theme == null ? "" : theme.builtIn ? "🔒 " + theme.name : theme.name;
-				return super.getListCellRendererComponent(list, text, index, isSelected, cellHasFocus);
+				String text = theme == null ? "" : theme.name;
+				Component cell = super.getListCellRendererComponent(list, text, index, isSelected, cellHasFocus);
+				setIcon(theme != null && theme.builtIn ? BUILT_IN_LOCK_ICON : null);
+				setIconTextGap(4);
+				return cell;
 			}
 		};
 	}
@@ -415,7 +460,11 @@ class RightClickStylerPanel extends PluginPanel
 		section.addRow(row("Corner radius", radiusSpinner));
 
 		JSpinner opacitySpinner = themeIntSpinner(t -> t.opacity, Theme::withOpacity, Limits.MIN_OPACITY, Limits.MAX_OPACITY);
-		section.addRow(row("Opacity", opacitySpinner));
+		section.addRow(row("Background opacity", opacitySpinner));
+
+		JSpinner hoverOpacitySpinner = themeIntSpinner(t -> t.hoverOpacity, Theme::withHoverOpacity,
+			Limits.MIN_OPACITY, Limits.MAX_OPACITY);
+		section.addRow(row("Hover opacity", hoverOpacitySpinner));
 
 		JComboBox<HoverStyle> hoverCombo = new JComboBox<>(HoverStyle.values());
 		hoverCombo.setRenderer(new TitleCaseListCellRenderer());
@@ -546,15 +595,84 @@ class RightClickStylerPanel extends PluginPanel
 		ColorJButton item = globalColourButton(config::itemColour, "Item colour", RightClickStylerConfig.KEY_ITEM_COLOUR);
 		ColorJButton object = globalColourButton(config::objectColour, "Object colour", RightClickStylerConfig.KEY_OBJECT_COLOUR);
 		ColorJButton other = globalColourButton(config::otherColour, "Other colour", RightClickStylerConfig.KEY_OTHER_COLOUR);
+		JPanel npcRow = row("NPC", npc);
+		JPanel playerRow = row("Player", player);
+		JPanel itemRow = row("Item", item);
+		JPanel objectRow = row("Object", object);
+		JPanel otherRow = row("Other", other);
+		JButton reset = new JButton("Reset Target Colours to Defaults");
+		reset.addActionListener(e -> resetTargetColours());
 
-		section.addRow(row("Mode", modeCombo(TargetMode.values(), config::targetMode, TargetMode.CUSTOM,
-			RightClickStylerConfig.KEY_TARGET_MODE, npc, player, item, object, other)));
-		section.addRow(row("NPC", npc));
-		section.addRow(row("Player", player));
-		section.addRow(row("Item", item));
-		section.addRow(row("Object", object));
-		section.addRow(row("Other", other));
+		JComboBox<TargetMode> mode = modeCombo(TargetMode.values(), config::targetMode, TargetMode.CUSTOM,
+			RightClickStylerConfig.KEY_TARGET_MODE, npcRow, playerRow, itemRow, objectRow, otherRow, reset);
+		JLabel explanation = new JLabel("Game colours active. Custom to edit.");
+		explanation.setFont(FontManager.getRunescapeSmallFont());
+		explanation.setEnabled(false);
+		JPanel modeRow = row("Mode", mode);
+		modeRow.add(explanation, BorderLayout.SOUTH);
+		ColorJButton[] colourButtons = {npc, player, item, object, other};
+		Runnable updateAppearance = () ->
+		{
+			boolean custom = mode.getSelectedItem() == TargetMode.CUSTOM;
+			explanation.setVisible(!custom);
+			Color[] configured = {config.npcColour(), config.playerColour(), config.itemColour(),
+				config.objectColour(), config.otherColour()};
+			for (int i = 0; i < colourButtons.length; i++)
+			{
+				// Keep the saved hex text; only the disabled swatch is muted.
+				setColourButton(colourButtons[i], configured[i]);
+				if (!custom)
+				{
+					colourButtons[i].setColor(mutedTargetColour(configured[i]));
+				}
+			}
+		};
+		mode.addActionListener(e -> updateAppearance.run());
+		globalControlRefreshers.add(updateAppearance);
+		updateAppearance.run();
+
+		section.addRow(modeRow);
+		section.addRow(npcRow);
+		section.addRow(playerRow);
+		section.addRow(itemRow);
+		section.addRow(objectRow);
+		section.addRow(otherRow);
+		section.addRow(reset);
 		return section;
+	}
+
+	private static Color mutedTargetColour(Color colour)
+	{
+		Color grey = ColorScheme.DARKER_GRAY_COLOR;
+		return new Color((colour.getRed() + 3 * grey.getRed()) / 4,
+			(colour.getGreen() + 3 * grey.getGreen()) / 4,
+			(colour.getBlue() + 3 * grey.getBlue()) / 4, colour.getAlpha());
+	}
+
+	private void resetTargetColours()
+	{
+		resetTargetColourSettings(key -> configManager.unsetConfiguration(RightClickStylerConfig.GROUP, key));
+		refreshing = true;
+		try
+		{
+			for (Runnable control : globalControlRefreshers)
+			{
+				control.run();
+			}
+		}
+		finally
+		{
+			refreshing = false;
+		}
+		preview.refresh();
+	}
+
+	static void resetTargetColourSettings(Consumer<String> unset)
+	{
+		for (String key : TARGET_COLOUR_KEYS)
+		{
+			unset.accept(key);
+		}
 	}
 
 	private CollapsibleSection buildLevelsSection()
@@ -618,10 +736,10 @@ class RightClickStylerPanel extends PluginPanel
 	}
 
 	/**
-	 * A global mode combo whose colour buttons are only enabled in the mode that uses them.
+	 * A global mode combo whose dependent controls are only enabled in the mode that uses them.
 	 */
 	private <E extends Enum<E>> JComboBox<E> modeCombo(E[] modes, Supplier<E> getter, E customMode, String key,
-		ColorJButton... colourButtons)
+		JComponent... dependentControls)
 	{
 		JComboBox<E> combo = new JComboBox<>(modes);
 		combo.setRenderer(new TitleCaseListCellRenderer());
@@ -629,10 +747,7 @@ class RightClickStylerPanel extends PluginPanel
 		Runnable updateEnabled = () ->
 		{
 			boolean custom = combo.getSelectedItem() == customMode;
-			for (ColorJButton button : colourButtons)
-			{
-				button.setEnabled(custom);
-			}
+			setModeControlsEnabled(custom, dependentControls);
 		};
 		updateEnabled.run();
 		combo.addActionListener(e ->
@@ -643,8 +758,27 @@ class RightClickStylerPanel extends PluginPanel
 			}
 			updateEnabled.run();
 		});
-		globalControlRefreshers.add(() -> combo.setSelectedItem(getter.get()));
+		globalControlRefreshers.add(() ->
+		{
+			combo.setSelectedItem(getter.get());
+			updateEnabled.run();
+		});
 		return combo;
+	}
+
+	static void setModeControlsEnabled(boolean enabled, JComponent... controls)
+	{
+		for (JComponent control : controls)
+		{
+			control.setEnabled(enabled);
+			if (control instanceof JPanel)
+			{
+				for (Component child : control.getComponents())
+				{
+					child.setEnabled(enabled);
+				}
+			}
+		}
 	}
 
 	private JSpinner globalIntSpinner(IntSupplier getter, int min, int max, String key)
@@ -953,6 +1087,19 @@ class RightClickStylerPanel extends PluginPanel
 	}
 
 	/**
+	 * What Reset all settings changes: every global setting returns to its default and the default
+	 * theme is selected. Saved themes ({@code userThemes}) and the sidebar button toggle are kept.
+	 */
+	static void resetAllSettings(Consumer<String> unset, ThemeManager themeManager)
+	{
+		for (String key : GLOBAL_SETTING_KEYS)
+		{
+			unset.accept(key);
+		}
+		themeManager.applyTheme(BuiltInThemes.DEFAULT_ID);
+	}
+
+	/**
 	 * Restores every global setting to its default and switches to the default theme, dropping
 	 * unsaved edits. Saved themes are kept.
 	 */
@@ -962,11 +1109,7 @@ class RightClickStylerPanel extends PluginPanel
 		{
 			return;
 		}
-		for (String key : GLOBAL_SETTING_KEYS)
-		{
-			configManager.unsetConfiguration(RightClickStylerConfig.GROUP, key);
-		}
-		themeManager.applyTheme(BuiltInThemes.DEFAULT_ID);
+		resetAllSettings(key -> configManager.unsetConfiguration(RightClickStylerConfig.GROUP, key), themeManager);
 
 		refreshing = true;
 		try

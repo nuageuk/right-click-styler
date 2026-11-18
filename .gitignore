@@ -8,3 +8,19 @@ nbactions.xml
 nb-configuration.xml
 nbproject/
 *.class
+/bin/
+/diagnostics/
+
+# Eclipse / VS Code Java language server build output (copies of src/*/resources)
+.vscode/
+*.iml
+
+# Local diagnostic output: kept on disk as evidence, never committed.
+# Live RuneLite traces contain account/session details.
+*.log
+# Raw benchmark and verification console captures
+experiments/*.txt
+# JUnit XML reports copied out of build/test-results
+TEST-*.xml
+# Local source snapshot backups
+*.zip
