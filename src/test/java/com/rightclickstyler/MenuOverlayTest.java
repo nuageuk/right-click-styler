@@ -1,5 +1,7 @@
 package com.rightclickstyler;
 
+import com.google.gson.Gson;
+import java.awt.AlphaComposite;
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.Rectangle;
@@ -14,6 +16,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import net.runelite.api.Actor;
+import net.runelite.api.BufferProvider;
 import net.runelite.api.Client;
 import net.runelite.api.Menu;
 import net.runelite.api.MenuAction;
@@ -21,6 +24,7 @@ import net.runelite.api.MenuEntry;
 import net.runelite.api.NPC;
 import net.runelite.api.Player;
 import net.runelite.api.Point;
+import net.runelite.api.Rasterizer;
 import net.runelite.api.widgets.Widget;
 import org.junit.Test;
 
@@ -58,6 +62,30 @@ public class MenuOverlayTest
 
 		assertFalse(MenuOverlay.containsSubMenu(new MenuEntry[]{plain}));
 		assertTrue(MenuOverlay.containsSubMenu(new MenuEntry[]{plain, submenu}));
+	}
+
+	@Test
+	public void probeReportsOnlyCanvasVisibleCandidateRectangles()
+	{
+		StubMenu root = new StubMenu(10, 10, 80, 64);
+		StubMenu visible = new StubMenu(90, 20, 40, 34);
+		StubMenu clipped = new StubMenu(180, 70, 40, 40);
+		StubMenu outside = new StubMenu(300, 10, 40, 34);
+		for (StubMenu child : new StubMenu[]{visible, clipped, outside})
+		{
+			child.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Action", null)});
+		}
+		root.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Visible", visible),
+			new StubMenuEntry("Clipped", clipped), new StubMenuEntry("Outside", outside)});
+		int[] pixels = new int[200 * 100];
+		SubmenuPrototypeProbe.Result result = SubmenuPrototypeProbe.probePixels(
+			pixels, 200, 100, SubmenuTree.capture(root),
+			() -> paint(pixels, 200, 100, root, visible));
+		assertEquals(SubmenuPrototypeProbe.State.ACTIVE, result.state);
+		assertEquals(2, result.visibleCandidates);
+		assertEquals(40L * 34 + 20L * 30, result.candidatePixels);
+		assertTrue(result.restored);
+		assertTrue(Arrays.equals(new int[pixels.length], pixels));
 	}
 
 	@Test
@@ -719,14 +747,13 @@ public class MenuOverlayTest
 		StubMenu root = new StubMenu(10, 10, 80, 49);
 		StubMenuEntry entry = new StubMenuEntry("Original", null);
 		root.setMenuEntries(new MenuEntry[]{entry});
-		Point mouse = new Point(20, 30);
-		PreparedMenuState state = PreparedMenuState.capture(SubmenuTree.capture(root), new int[0], mouse);
-		assertTrue(state.matches(root, new Point(20, 30)));
+		PreparedMenuState state = PreparedMenuState.capture(SubmenuTree.capture(root), new int[0]);
+		assertTrue(state.matches(root));
 		entry.setOption("Changed");
-		assertFalse(state.matches(root, mouse));
+		assertFalse(state.matches(root));
 		entry.setOption("Original");
 		root.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Replacement", null)});
-		assertFalse(state.matches(root, mouse));
+		assertFalse(state.matches(root));
 	}
 
 	@Test
@@ -739,99 +766,58 @@ public class MenuOverlayTest
 		second.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Second action", null)});
 		root.setMenuEntries(new MenuEntry[]{new StubMenuEntry("First", first),
 			new StubMenuEntry("Second", second)});
-		Point mouse = new Point(20, 50);
-		PreparedMenuState state = PreparedMenuState.capture(SubmenuTree.capture(root), new int[]{0}, mouse);
-		assertTrue(state.matches(root, mouse));
+		PreparedMenuState state = PreparedMenuState.capture(SubmenuTree.capture(root), new int[]{0});
+		assertTrue(state.matches(root));
 		root.setMenuEntries(new MenuEntry[]{new StubMenuEntry("First", second),
 			new StubMenuEntry("Second", first)});
-		assertFalse(state.matches(root, mouse));
+		assertFalse(state.matches(root));
 	}
 
 	@Test
-	public void preparedFrameRejectsMouseMovementAndDetachedGeometry()
+	public void preparedFrameRejectsDetachedGeometryAndReplacedChild()
 	{
 		StubMenu root = new StubMenu(10, 10, 80, 49);
 		StubMenu child = new StubMenu(90, 20, 80, 49);
 		child.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Action", null)});
 		root.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Open", child)});
-		Point mouse = new Point(20, 30);
-		PreparedMenuState state = PreparedMenuState.capture(SubmenuTree.capture(root), new int[]{0}, mouse);
-		assertTrue(state.matches(root, mouse));
-		assertTrue(state.matches(root, new Point(21, 30)));
-		assertFalse(state.matches(root, new Point(180, 100)));
+		PreparedMenuState state = PreparedMenuState.capture(SubmenuTree.capture(root), new int[]{0});
+		assertTrue(state.matches(root));
 		child.setBounds(0, 0, 0, 0);
-		assertFalse(state.matches(root, mouse));
+		assertEquals("geometry node=1", state.mismatchReason(root));
 		child.setBounds(90, 20, 80, 49);
+		assertTrue(state.matches(root));
 		root.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Open", new StubMenu(90, 20, 80, 49))});
-		assertFalse(state.matches(root, mouse));
+		assertEquals("entry submenu depth=0 index=0", state.mismatchReason(root));
 	}
 
 	@Test
-	public void mouseMovementDuringPreparationAndBeforeConsumptionUsesSelectedPath()
-	{
-		StubMenu root = new StubMenu(10, 10, 80, 49);
-		StubMenu child = new StubMenu(90, 20, 80, 64);
-		child.setMenuEntries(new MenuEntry[]{new StubMenuEntry("One", null),
-			new StubMenuEntry("Two", null)});
-		root.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Open", child)});
-		PreparedMenuState state = PreparedMenuState.capture(SubmenuTree.capture(root),
-			new int[]{0}, new Point(20, 32));
-		for (int dx = 1; dx <= 10; dx++)
-		{
-			assertTrue(state.matches(root, new Point(20 + dx, 32)));
-			assertTrue(state.allowsMovement(new Point(20, 32), new Point(20 + dx, 32)));
-		}
-		assertTrue(state.allowsMovement(new Point(20, 32), new Point(100, 45)));
-		state.setRenderedMouse(new Point(100, 45));
-		assertTrue(state.matches(root, new Point(101, 45)));
-		assertTrue(state.allowsMovement(new Point(100, 45), new Point(100, 60)));
-		assertTrue(state.canRetarget(new Point(100, 60)));
-		state.setRenderedMouse(new Point(100, 60));
-		assertTrue(state.matches(root, new Point(100, 60)));
-		assertFalse(state.allowsMovement(new Point(100, 60), new Point(180, 100)));
-		assertFalse(state.canRetarget(new Point(180, 100)));
-		assertEquals("mouse hover node=1 row=1 selected=true -> outside",
-			state.mismatchReason(root, new Point(180, 100)));
-	}
-
-	@Test
-	public void adjacentParentSwitchIsRejectedButStableEntriesAreNot()
+	public void preparedStateReportsEachStructuralMismatch()
 	{
 		StubMenu root = new StubMenu(10, 10, 80, 64);
-		StubMenu first = new StubMenu(90, 20, 80, 49);
-		StubMenu second = new StubMenu(90, 35, 80, 49);
-		first.setMenuEntries(new MenuEntry[]{new StubMenuEntry("First action", null)});
-		second.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Second action", null)});
-		StubMenuEntry firstParent = new StubMenuEntry("First", first);
-		root.setMenuEntries(new MenuEntry[]{firstParent, new StubMenuEntry("Second", second)});
-		PreparedMenuState state = PreparedMenuState.capture(SubmenuTree.capture(root),
-			new int[]{0}, new Point(20, 50));
-		assertTrue(state.matches(root, new Point(25, 51)));
-		assertFalse(state.allowsMovement(new Point(20, 50), new Point(20, 35)));
-		assertEquals("mouse hover node=0 row=1 selected=true -> node=0 row=0 selected=false",
-			state.mismatchReason(root, new Point(20, 35)));
-		firstParent.setOption("Changed");
-		assertEquals("entry option depth=0 index=0", state.mismatchReason(root, new Point(20, 50)));
-		firstParent.setOption("First");
-		root.setMenuEntries(new MenuEntry[]{new StubMenuEntry("First", second),
-			new StubMenuEntry("Second", first)});
-		assertEquals("entry submenu depth=0 index=0", state.mismatchReason(root, new Point(20, 50)));
-	}
-
-	@Test
-	public void movingOntoUnprovedNestedParentIsRejected()
-	{
-		StubMenu root = new StubMenu(10, 10, 80, 49);
-		StubMenu child = new StubMenu(90, 20, 80, 64);
-		StubMenu nested = new StubMenu(170, 35, 80, 49);
-		nested.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Nested action", null)});
-		child.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Nested", nested),
-			new StubMenuEntry("Plain", null)});
-		root.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Open", child)});
-		PreparedMenuState state = PreparedMenuState.capture(SubmenuTree.capture(root),
-			new int[]{0}, new Point(100, 45));
-		assertFalse(state.allowsMovement(new Point(100, 45), new Point(100, 60)));
-		assertFalse(state.canRetarget(new Point(100, 60)));
+		StubMenu child = new StubMenu(90, 20, 80, 49);
+		StubMenuEntry childAction = new StubMenuEntry("Child action", null);
+		child.setMenuEntries(new MenuEntry[]{childAction});
+		StubMenuEntry parent = new StubMenuEntry("Open", child);
+		MenuEntry[] rootEntries = {parent, new StubMenuEntry("Other", null)};
+		root.setMenuEntries(rootEntries);
+		PreparedMenuState state = PreparedMenuState.capture(SubmenuTree.capture(root), new int[]{0});
+		assertEquals(null, state.mismatchReason(root));
+		assertEquals("root identity", state.mismatchReason(new StubMenu(10, 10, 80, 64)));
+		parent.setOption("Changed");
+		assertEquals("entry option depth=0 index=0", state.mismatchReason(root));
+		parent.setOption("Open");
+		childAction.setOption("Changed");
+		assertEquals("entry option depth=1 index=0", state.mismatchReason(root));
+		childAction.setOption("Child action");
+		child.setBounds(90, 21, 80, 49);
+		assertEquals("geometry node=1", state.mismatchReason(root));
+		child.setBounds(90, 20, 80, 49);
+		child.setMenuEntries(new MenuEntry[]{childAction, new StubMenuEntry("Extra", null)});
+		assertEquals("entry count depth=1", state.mismatchReason(root));
+		child.setMenuEntries(new MenuEntry[]{null});
+		assertEquals("entry presence depth=1 index=0", state.mismatchReason(root));
+		child.setMenuEntries(new MenuEntry[]{childAction});
+		assertEquals(null, state.mismatchReason(root));
 	}
 
 	@Test
@@ -839,12 +825,11 @@ public class MenuOverlayTest
 	{
 		StubMenu root = new StubMenu(10, 10, 80, 49);
 		root.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Action", null)});
-		Point mouse = new Point(20, 30);
-		PreparedMenuState state = PreparedMenuState.capture(SubmenuTree.capture(root), new int[0], mouse);
-		assertFalse(state.matches(null, mouse));
+		PreparedMenuState state = PreparedMenuState.capture(SubmenuTree.capture(root), new int[0]);
+		assertFalse(state.matches(null));
 		StubMenu reopened = new StubMenu(10, 10, 80, 49);
 		reopened.setMenuEntries(root.getMenuEntries());
-		assertFalse(state.matches(reopened, mouse));
+		assertFalse(state.matches(reopened));
 	}
 
 	@Test
@@ -853,7 +838,7 @@ public class MenuOverlayTest
 		StubMenu root = new StubMenu(10, 10, 80, 49);
 		StubMenuEntry entry = new StubMenuEntry("Action", null);
 		root.setMenuEntries(new MenuEntry[]{entry});
-		MenuOverlay overlay = preparedOverlay(root, new Point(20, 30));
+		MenuOverlay overlay = preparedOverlay(root);
 		entry.setOption("Changed");
 		BufferedImage image = new BufferedImage(100, 100, BufferedImage.TYPE_INT_ARGB);
 		Graphics2D graphics = image.createGraphics();
@@ -865,7 +850,7 @@ public class MenuOverlayTest
 		{
 			graphics.dispose();
 		}
-		assertEquals(0, image.getRGB(10, 10));
+		assertEquals("consumed frame cannot restore native pixels", 0, image.getRGB(10, 10));
 		assertEquals(1L, privateField(overlay, "prototypeChangedDrops"));
 		assertFalse((boolean) privateField(overlay, "prepared"));
 	}
@@ -875,13 +860,62 @@ public class MenuOverlayTest
 	{
 		StubMenu root = new StubMenu(10, 10, 80, 49);
 		root.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Action", null)});
-		MenuOverlay overlay = preparedOverlay(root, new Point(20, 30));
+		MenuOverlay overlay = preparedOverlay(root);
 		overlay.render(null);
 		assertEquals(1L, privateField(overlay, "prototypeBlitFailures"));
 		assertTrue((boolean) privateField(overlay, "prototypeBlitFailed"));
 		assertFalse((boolean) privateField(overlay, "prepared"));
 		assertFalse("later menu events must remain native",
-			overlay.prepareSubmenuFrame(root, root.getMenuEntries()));
+			overlay.prepareSubmenuFrame(root, root.getMenuEntries(), new Point(20, 30)));
+	}
+
+	@Test
+	public void transparentReplacementPreservesSceneAtZeroThemeOpacity()
+	{
+		BufferedImage replacement = new BufferedImage(100, 70, BufferedImage.TYPE_INT_ARGB);
+		Graphics2D prepared = replacement.createGraphics();
+		try
+		{
+			prepared.setColor(Color.BLACK);
+			prepared.fillRect(0, 0, 100, 70);
+			prepared.setComposite(AlphaComposite.Clear);
+			prepared.fillRect(0, 0, 100, 70);
+			prepared.setComposite(AlphaComposite.SrcOver);
+			Theme theme = BuiltInThemes.find("classic").withOpacity(0)
+				.withFont(FontChoice.SANS).withShowHeader(false)
+				.withShowBorder(false).withShowShadow(false).withTextShadow(false);
+			new MenuRenderer().render(prepared, null, theme, new RightClickStylerConfig() { },
+				Collections.singletonList(new MenuRenderer.Row("Action", "", MenuRenderer.TargetKind.OTHER)),
+				new Rectangle(10, 10, 80, 49), -1, 0);
+		}
+		finally
+		{
+			prepared.dispose();
+		}
+		BufferedImage frame = new BufferedImage(100, 70, BufferedImage.TYPE_INT_ARGB);
+		Graphics2D graphics = frame.createGraphics();
+		try
+		{
+			graphics.setColor(Color.MAGENTA);
+			graphics.fillRect(0, 0, 100, 70);
+			graphics.drawImage(replacement, 0, 0, null);
+		}
+		finally
+		{
+			graphics.dispose();
+		}
+		assertEquals("gap outside menu stays transparent", 0, replacement.getRGB(95, 65));
+		assertEquals("underlying scene outside menu stays visible", Color.MAGENTA.getRGB(), frame.getRGB(95, 65));
+		assertEquals("zero-opacity fill reveals the scene", Color.MAGENTA.getRGB(), frame.getRGB(80, 50));
+		boolean textVisible = false;
+		for (int y = 29; y < 44; y++)
+		{
+			for (int x = 13; x < 70; x++)
+			{
+				textVisible |= frame.getRGB(x, y) != Color.MAGENTA.getRGB();
+			}
+		}
+		assertTrue("text remains visible", textVisible);
 	}
 
 	@Test
@@ -889,72 +923,14 @@ public class MenuOverlayTest
 	{
 		StubMenu root = new StubMenu(10, 10, 80, 49);
 		root.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Action", null)});
-		MenuOverlay overlay = preparedOverlay(root, new Point(20, 30));
+		MenuOverlay overlay = preparedOverlay(root);
 		RightClickStylerPlugin plugin = new RightClickStylerPlugin();
 		setPrivateField(plugin, "menuOverlay", overlay);
 		plugin.onMenuOpened(null);
 		assertFalse((boolean) privateField(overlay, "prepared"));
 	}
 
-	@Test
-	public void finalBlitRefreshesHoverWithinSameChild() throws Exception
-	{
-		StubMenu root = new StubMenu(10, 10, 80, 49);
-		StubMenu child = new StubMenu(90, 20, 80, 64);
-		child.setMenuEntries(new MenuEntry[]{new StubMenuEntry("One", null),
-			new StubMenuEntry("Two", null)});
-		root.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Open", child)});
-		AtomicReference<Point> mouse = new AtomicReference<>(new Point(100, 45));
-		Client client = (Client) Proxy.newProxyInstance(Client.class.getClassLoader(),
-			new Class<?>[]{Client.class}, (proxy, method, args) ->
-			{
-				switch (method.getName())
-				{
-				case "isMenuOpen": return true;
-				case "getMenu": return root;
-				case "isMenuScrollable": return false;
-				case "getMouseCanvasPosition": return mouse.get();
-				default: throw new UnsupportedOperationException(method.getName());
-				}
-			});
-		Constructor<MenuOverlay> constructor = MenuOverlay.class.getDeclaredConstructor(
-			Client.class, RightClickStylerConfig.class, ThemeManager.class);
-		constructor.setAccessible(true);
-		MenuOverlay overlay = constructor.newInstance(client, new RightClickStylerConfig() { }, null);
-		SubmenuTree tree = SubmenuTree.capture(root);
-		ScrollableMenuViewport viewport = ScrollableMenuViewport.capture(tree.nodes.get(0).bounds,
-			root.getMenuEntries().length, 200, 100, false, 0);
-		setPrivateField(overlay, "prepared", true);
-		setPrivateField(overlay, "preparedRoot", root);
-		setPrivateField(overlay, "preparedState", PreparedMenuState.capture(
-			tree, new int[]{0}, mouse.get(), viewport));
-		setPrivateField(overlay, "preparedTree", tree);
-		setPrivateField(overlay, "preparedChain", new int[]{0});
-		setPrivateField(overlay, "preparedViewport", viewport);
-		setPrivateField(overlay, "preparedRegion", new Rectangle(0, 0, 200, 100));
-		setPrivateField(overlay, "preparedTheme", BuiltInThemes.find("classic")
-			.withHoverStyle(HoverStyle.FILL).withHover(Color.RED));
-		setPrivateField(overlay, "prototypeImage", new BufferedImage(200, 100,
-			BufferedImage.TYPE_INT_ARGB));
-		mouse.set(new Point(100, 60));
-		BufferedImage output = new BufferedImage(200, 100, BufferedImage.TYPE_INT_ARGB);
-		Graphics2D graphics = output.createGraphics();
-		try
-		{
-			overlay.render(graphics);
-		}
-		finally
-		{
-			graphics.dispose();
-		}
-		assertEquals(1L, privateField(overlay, "prototypeBlits"));
-		assertEquals(0L, privateField(overlay, "prototypeChangedDrops"));
-		assertTrue(output.getRGB(100, 60) != 0);
-		assertTrue("hover must move to the current child row",
-			output.getRGB(160, 45) != output.getRGB(160, 60));
-	}
-
-	private static MenuOverlay preparedOverlay(StubMenu root, Point mouse) throws Exception
+	private static MenuOverlay preparedOverlay(StubMenu root) throws Exception
 	{
 		Client client = (Client) Proxy.newProxyInstance(Client.class.getClassLoader(),
 			new Class<?>[]{Client.class}, (proxy, method, args) ->
@@ -967,7 +943,8 @@ public class MenuOverlayTest
 				case "getMenuScroll": return 0;
 				case "getCanvasWidth": return 100;
 				case "getCanvasHeight": return 100;
-				case "getMouseCanvasPosition": return mouse;
+				case "getMouseCanvasPosition":
+					throw new AssertionError("the prepared lifecycle must not re-read the mouse");
 				default: throw new UnsupportedOperationException(method.getName());
 				}
 			});
@@ -978,7 +955,7 @@ public class MenuOverlayTest
 		setPrivateField(overlay, "prepared", true);
 		setPrivateField(overlay, "preparedRoot", root);
 		setPrivateField(overlay, "preparedState", PreparedMenuState.capture(
-			SubmenuTree.capture(root), new int[0], mouse));
+			SubmenuTree.capture(root), new int[0]));
 		setPrivateField(overlay, "prototypeImage", new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB));
 		return overlay;
 	}
@@ -1281,6 +1258,57 @@ public class MenuOverlayTest
 			new Rectangle(650, 0, 180, 679), 44, 1100, 300, true, 19);
 		assertTrue(MenuOverlay.validateScrolledChild(tree, new int[]{0}, offscreen, 300,
 			active).reason.contains("outside the root viewport"));
+		assertTrue(Arrays.equals(new int[pixels.length], pixels));
+	}
+
+	@Test
+	public void exactProofAppliesTheSameDetachedAndViewportChecks()
+	{
+		StubMenu root = new StubMenu(650, 0, 180, 679);
+		MenuEntry[] entries = new MenuEntry[44];
+		for (int i = 0; i < entries.length; i++)
+		{
+			entries[i] = new StubMenuEntry("Option " + i, null);
+		}
+		StubMenu child25 = new StubMenu(833, 270, 230, 67);
+		child25.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Follow", null)});
+		StubMenu child26 = new StubMenu(400, 270, 200, 67);
+		child26.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Follow", null)});
+		entries[25] = new StubMenuEntry("Player 25", child25);
+		entries[26] = new StubMenuEntry("Player 26", child26);
+		root.setMenuEntries(entries);
+		SubmenuTree tree = SubmenuTree.capture(root, entries, 3);
+		ScrollableMenuViewport scrolled = ScrollableMenuViewport.capture(
+			new Rectangle(650, 0, 180, 679), 44, 1100, 300, true, 3);
+		int[] pixels = new int[1100 * 300];
+		SubmenuPrototypeProbe probe = new SubmenuPrototypeProbe();
+		probe.requireExact(true);
+		SubmenuPrototypeProbe.Result rootOnly = probe.samplePixels(pixels, 1100, 300,
+			tree, () -> paint(pixels, 1100, 300, root));
+		assertEquals(ExactCoverageResolver.State.RESOLVED, rootOnly.exact.state);
+		assertTrue(MenuOverlay.validateScrolledChild(tree, new int[]{0}, scrolled, 300,
+			rootOnly, true).reason.contains("detached"));
+		SubmenuPrototypeProbe.Result active = probe.samplePixels(pixels, 1100, 300,
+			tree, () -> paint(pixels, 1100, 300, root, child25));
+		assertEquals(ExactCoverageResolver.State.RESOLVED, active.exact.state);
+		assertTrue(Arrays.equals(new int[]{0}, active.exact.chain));
+		MenuOverlay.ScrollChildValidation proven = MenuOverlay.validateScrolledChild(tree, new int[]{0},
+			scrolled, 300, active, true);
+		assertEquals(null, proven.reason);
+		assertTrue("drawn at its retained position, proven by the exact reading", proven.detached);
+		assertTrue("a child off the resolved chain is never proven",
+			MenuOverlay.validateScrolledChild(tree, new int[]{1}, scrolled, 300, active, true)
+				.reason.contains("detached"));
+		ScrollableMenuViewport offscreen = ScrollableMenuViewport.capture(
+			new Rectangle(650, 0, 180, 679), 44, 1100, 300, true, 19);
+		assertTrue("a scrolled-out parent stays unsupported",
+			MenuOverlay.validateScrolledChild(tree, new int[]{0}, offscreen, 300, active, true)
+				.reason.contains("outside the root viewport"));
+		active.exact = new ExactCoverageResolver.Outcome(ExactCoverageResolver.State.AMBIGUOUS,
+			new int[0], 2, new int[]{0}, active.exact.changedPixels);
+		assertTrue("an unresolved reading proves nothing",
+			MenuOverlay.validateScrolledChild(tree, new int[]{0}, scrolled, 300, active, true)
+				.reason.contains("exact=AMBIGUOUS"));
 		assertTrue(Arrays.equals(new int[pixels.length], pixels));
 	}
 
@@ -1822,6 +1850,8 @@ public class MenuOverlayTest
 			BuiltInThemes.find("classic"));
 		benchmarkDistribution("five-overlap", 8, 5, 5, 3, 0, false, false,
 			BuiltInThemes.find("classic"));
+		benchmarkDistribution("long-nonscrollable-14", 15, 14, 14, 8, 0, false, false,
+			BuiltInThemes.find("classic"));
 		benchmarkDistribution("twenty-candidates", 20, 20, 20, 3, 0, false, false,
 			BuiltInThemes.find("classic"));
 		benchmarkDistribution("forty-candidates", 40, 40, 40, 3, 0, false, false,
@@ -1833,6 +1863,8 @@ public class MenuOverlayTest
 		benchmarkDistribution("rapid-switching", 8, 5, 5, 15, 0, false, true,
 			BuiltInThemes.find("classic"));
 		benchmarkDistribution("retained-scroll-bounds", 44, 44, 5, 3, 3, false, false,
+			BuiltInThemes.find("classic"));
+		benchmarkDistribution("scrollable-retained-57", 59, 57, 34, 8, 0, false, false,
 			BuiltInThemes.find("classic"));
 		benchmarkDistribution("canvas-edge", 8, 1, 1, 0, 0, true, false,
 			BuiltInThemes.find("classic"));
@@ -1895,6 +1927,7 @@ public class MenuOverlayTest
 		long[] decision = new long[samples], render = new long[samples], blit = new long[samples];
 		long[] allocatedBytes = new long[samples];
 		String lastState = "NORMAL";
+		SubmenuPrototypeProbe.Result lastResult = null;
 		long cold = 0;
 		long gcBefore = -1, compilationBefore = -1;
 		java.lang.management.CompilationMXBean compilation =
@@ -1995,9 +2028,13 @@ public class MenuOverlayTest
 			allocatedBytes[sample] = allocated
 				? allocationBean.getThreadAllocatedBytes(threadId) - allocationStart : -1;
 			lastState = result == null ? "NORMAL" : result.state.name();
+			lastResult = result;
 		}
-		System.out.printf("SYNTHETIC DIST %s state=%s cold=%.3fms total=%s capture=%s viewport=%s prep=%s copy=%s marker=%s native=%s witness=%s decision=%s restore=%s render=%s blit=%s alloc=%s bytes samples=%d%n",
-			name, lastState, cold / 1_000_000.0,
+		System.out.printf("SYNTHETIC DIST %s state=%s rootRows=%d scrollable=%s scroll=%d candidates=%d visibleCandidates=%d candidatePixels=%d cold=%.3fms total=%s capture=%s viewport=%s prep=%s copy=%s marker=%s native=%s witness=%s decision=%s restore=%s render=%s blit=%s alloc=%s bytes samples=%d%n",
+			name, lastState, rootCount, root.height > height, scroll, candidateCount,
+			lastResult == null ? 0 : lastResult.visibleCandidates,
+			lastResult == null ? 0 : lastResult.candidatePixels,
+			cold / 1_000_000.0,
 			stats(total), stats(capture), stats(viewportTime), stats(prep), stats(copy),
 			stats(marker), stats(nativeDraw), stats(witness), stats(decision),
 			stats(restore), stats(render), stats(blit), statsBytes(allocatedBytes), samples);

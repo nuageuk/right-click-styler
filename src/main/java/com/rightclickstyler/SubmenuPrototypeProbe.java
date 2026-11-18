@@ -12,12 +12,22 @@ import net.runelite.api.Rasterizer;
 final class SubmenuPrototypeProbe
 {
 	private static final int SENTINEL = 0x13579BDF;
+	// The exact-coverage reading never changes this probe's own decision. The overlay may
+	// require it (authoritative mode) even when the shadow property disables it.
+	private static final boolean EXACT_COVERAGE_SHADOW =
+		!"false".equals(System.getProperty("rightclickstyler.exactCoverageShadow"));
 	private static final int MARGIN = 2;
 	private static final int EDGE_TOLERANCE = 3;
 	private static final long MAX_FOOTPRINT_SCAN_PIXELS = 1_048_576;
 	// At most 8 MiB of exclusive witness positions, plus bounded shared storage.
 	private static final long MAX_CANDIDATE_AREA_PIXELS = 2_097_152;
 	private int[] snapshot = new int[0];
+
+	static boolean exactCoverageShadowEnabled()
+	{
+		return EXACT_COVERAGE_SHADOW;
+	}
+
 	private short[] overlapCoverage = new short[0];
 	private int[][] witnessBuffers = new int[0][];
 	private int[][] sharedBuffers = new int[0][];
@@ -25,6 +35,18 @@ final class SubmenuPrototypeProbe
 	private int[] footprintPositions = new int[0];
 	private int[] changedFootprint = new int[0];
 	private final long[] phaseTimes = new long[5];
+	private int lastVisibleCandidates;
+	private long lastCandidatePixels;
+	private final ExactCoverageResolver exactResolver = new ExactCoverageResolver();
+	private ExactCoverageResolver.Outcome lastExact = ExactCoverageResolver.Outcome.NOT_EVALUATED;
+	private boolean exactRequired;
+	private boolean lastFramebufferVerified;
+
+	/** Evaluate the exact-coverage reading on every probe, whatever the shadow property says. */
+	void requireExact(boolean required)
+	{
+		exactRequired = required;
+	}
 
 	Result probe(Client client, SubmenuTree tree)
 	{
@@ -52,7 +74,11 @@ final class SubmenuPrototypeProbe
 			|| afterRaster.getHeight() != height || afterProvider.getWidth() != width
 			|| afterProvider.getHeight() != height)
 		{
-			return Result.failure(State.FAILURE, "buffer identity or dimensions changed during draw");
+			Result failure = Result.failure(State.FAILURE, "buffer identity or dimensions changed during draw");
+			failure.drawPasses = result.drawPasses;
+			failure.visibleCandidates = result.visibleCandidates;
+			failure.candidatePixels = result.candidatePixels;
+			return failure;
 		}
 		return result;
 	}
@@ -65,7 +91,12 @@ final class SubmenuPrototypeProbe
 
 	Result samplePixels(int[] pixels, int width, int height, SubmenuTree tree, Runnable nativeDraw)
 	{
-		return samplePixelsPass(pixels, width, height, tree, nativeDraw).withPhases(phaseTimes);
+		Result result = samplePixelsPass(pixels, width, height, tree, nativeDraw).withPhases(phaseTimes);
+		result.visibleCandidates = lastVisibleCandidates;
+		result.candidatePixels = lastCandidatePixels;
+		result.exact = lastExact;
+		result.framebufferVerified = lastFramebufferVerified;
+		return result;
 	}
 
 	private Result samplePixelsPass(int[] pixels, int width, int height,
@@ -73,6 +104,10 @@ final class SubmenuPrototypeProbe
 	{
 		long start = System.nanoTime();
 		Arrays.fill(phaseTimes, 0);
+		lastVisibleCandidates = 0;
+		lastCandidatePixels = 0;
+		lastExact = ExactCoverageResolver.Outcome.NOT_EVALUATED;
+		lastFramebufferVerified = false;
 		if (pixels == null || width <= 0 || height <= 0 || (long) width * height > pixels.length)
 		{
 			return Result.failure(State.UNSUPPORTED, "invalid framebuffer");
@@ -97,6 +132,8 @@ final class SubmenuPrototypeProbe
 				visibleCandidates[visibleCount++] = i;
 			}
 		}
+		lastVisibleCandidates = visibleCount;
+		lastCandidatePixels = totalVisibleArea;
 		long coverageAllocation = 0;
 		if (overlapCoverage.length != pixels.length)
 		{
@@ -352,6 +389,24 @@ final class SubmenuPrototypeProbe
 				}
 			}
 			phaseTimes[3] = System.nanoTime() - compareStart;
+			if ((EXACT_COVERAGE_SHADOW || exactRequired) && rootChanged > 0)
+			{
+				// Reads the marked pixels before the restore; it cannot throw or write pixels.
+				int lists = 2 * candidates.size() + 1;
+				int[][] positions = new int[lists][];
+				int[] sizes = new int[lists];
+				for (int i = 0; i < candidates.size(); i++)
+				{
+					positions[2 * i] = witnessBuffers[i];
+					sizes[2 * i] = counts[i];
+					positions[2 * i + 1] = sharedBuffers[i];
+					sizes[2 * i + 1] = sharedCounts[i];
+				}
+				positions[lists - 1] = footprintPositions;
+				sizes[lists - 1] = footprintCount;
+				lastExact = exactResolver.resolve(pixels, width, height, SENTINEL, root, MARGIN,
+					candidates, tree.candidateParents, dormant, positions, sizes);
+			}
 		}
 		finally
 		{
@@ -391,6 +446,9 @@ final class SubmenuPrototypeProbe
 				start, counts, changes, sharedCounts, sharedChanges,
 				drawNanos, before.length, allocatedBytesMin, restored);
 		}
+		// Restored exactly, every rectangle unchanged by the draw, and the draw reached the
+		// marked root: the evidence describes this frame. Every result below is a reading of it.
+		lastFramebufferVerified = true;
 		int[] chain = activeChain(tree.candidateParents, changes);
 		if (chain == null)
 		{
@@ -706,6 +764,8 @@ final class SubmenuPrototypeProbe
 		final long allocatedBytesMin;
 		final boolean restored;
 		int drawPasses;
+		int visibleCandidates;
+		long candidatePixels;
 		long preparationNanos;
 		long copyNanos;
 		long markerNanos;
@@ -715,6 +775,13 @@ final class SubmenuPrototypeProbe
 		int footprintMatches;
 		int footprintChangedPixels;
 		Rectangle footprintBounds;
+		ExactCoverageResolver.Outcome exact = ExactCoverageResolver.Outcome.NOT_EVALUATED;
+		/**
+		 * The framebuffer was restored exactly, no menu rectangle changed during the draw, and
+		 * the native draw reached the marked root. False for every buffer, restore and geometry
+		 * failure, including a later buffer identity failure, which builds a fresh result.
+		 */
+		boolean framebufferVerified;
 
 		private Result(State state, String reason, int[] activeChain, int[] witnesses,
 			int[] changed, int[] sharedWitnesses, int[] sharedChanged,

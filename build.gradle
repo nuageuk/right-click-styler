@@ -41,6 +41,11 @@ sourceSets.test.java.srcDir 'experiments'
 tasks.withType(Test).configureEach {
 	systemProperty 'rightclickstyler.submenuLifecycle',
 		project.findProperty('testSubmenuLifecycle') ?: 'hardened'
+	systemProperty 'rightclickstyler.submenuTrace',
+		project.findProperty('submenuTrace') ?: 'false'
+	// Default for overlays the tests do not configure; tests of either mode set it explicitly.
+	systemProperty 'rightclickstyler.exactCoverageAuthoritative',
+		project.findProperty('testExactAuthoritative') ?: 'false'
 }
 
 tasks.register('run', JavaExec) {
@@ -49,7 +54,8 @@ tasks.register('run', JavaExec) {
 
 	jvmArgs "-ea", "-Drightclickstyler.submenuPrototype=${project.findProperty('submenuPrototype') ?: 'false'}",
 		"-Drightclickstyler.submenuTrace=${project.findProperty('submenuTrace') ?: 'false'}",
-		"-Drightclickstyler.submenuLifecycle=${project.findProperty('submenuLifecycle') ?: 'baseline'}"
+		"-Drightclickstyler.submenuLifecycle=${project.findProperty('submenuLifecycle') ?: 'baseline'}",
+		"-Drightclickstyler.exactCoverageAuthoritative=${project.findProperty('exactAuthoritative') ?: 'false'}"
 	args "--developer-mode", "--debug"
 }
 

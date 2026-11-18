@@ -5,22 +5,25 @@ import java.util.function.Consumer;
 import net.runelite.api.Menu;
 import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
-import net.runelite.api.Point;
 
-/** The public menu state that produced one prepared image. */
+/**
+ * The public menu structure that produced one prepared image.
+ *
+ * <p>The mouse is deliberately not part of this state. RuneLite's native submenu state only
+ * changes in the client's per-cycle input step, never while a frame is being prepared or
+ * drawn, so a pointer movement during preparation cannot invalidate the native probe. The
+ * themed hover row comes from the single mouse sample taken when {@code BeforeMenuRender}
+ * begins; a later movement is picked up by the next frame's probe.
+ */
 final class PreparedMenuState
 {
 	private final SubmenuTree tree;
 	private final EntryState[][] selectedEntries;
 	private final int[] selectedNodes;
-	private final ScrollableMenuViewport rootViewport;
-	private MouseLocation renderedMouse;
 
-	private PreparedMenuState(SubmenuTree tree, int[] activeChain, Point mouse,
-		ScrollableMenuViewport rootViewport)
+	private PreparedMenuState(SubmenuTree tree, int[] activeChain)
 	{
 		this.tree = tree;
-		this.rootViewport = rootViewport;
 		this.selectedNodes = new int[activeChain.length + 1];
 		this.selectedEntries = new EntryState[selectedNodes.length][];
 		for (int depth = 0; depth < selectedNodes.length; depth++)
@@ -35,26 +38,24 @@ final class PreparedMenuState
 			}
 			selectedEntries[depth] = snapshot;
 		}
-		renderedMouse = locate(mouse);
 	}
 
-	static PreparedMenuState capture(SubmenuTree tree, int[] activeChain, Point mouse)
+	static PreparedMenuState capture(SubmenuTree tree, int[] activeChain)
 	{
-		return new PreparedMenuState(tree, activeChain, mouse, null);
+		return new PreparedMenuState(tree, activeChain);
 	}
 
-	static PreparedMenuState capture(SubmenuTree tree, int[] activeChain, Point mouse,
-		ScrollableMenuViewport rootViewport)
+	boolean matches(Menu currentRoot)
 	{
-		return new PreparedMenuState(tree, activeChain, mouse, rootViewport);
+		return mismatchReason(currentRoot) == null;
 	}
 
-	boolean matches(Menu currentRoot, Point currentMouse)
-	{
-		return mismatchReason(currentRoot, currentMouse) == null;
-	}
-
-	String mismatchReason(Menu currentRoot, Point currentMouse)
+	/**
+	 * @return why the current public menu structure no longer matches the prepared image, or
+	 * null when root identity, every node's geometry, the selected submenu links and the
+	 * selected menus' entries are all unchanged.
+	 */
+	String mismatchReason(Menu currentRoot)
 	{
 		if (currentRoot != tree.root)
 		{
@@ -105,130 +106,7 @@ final class PreparedMenuState
 				}
 			}
 		}
-		MouseLocation current = locate(currentMouse);
-		if (!renderedMouse.selectedBranch && !renderedMouse.plainRoot)
-		{
-			return "mouse outside selected path " + renderedMouse;
-		}
-		return renderedMouse.sameHover(current) ? null
-			: "mouse hover " + renderedMouse + " -> " + current;
-	}
-
-	/** A native-proved child remains valid while the pointer stays on its selected path. */
-	boolean allowsMovement(Point from, Point to)
-	{
-		MouseLocation first = locate(from);
-		MouseLocation second = locate(to);
-		return ((first.selectedBranch || first.plainRoot) && first.sameHover(second))
-			|| (first.selectedBranch && second.selectedBranch)
-			|| (selectedNodes.length == 1 && first.plainRoot && second.plainRoot);
-	}
-
-	String movementReason(Point from, Point to)
-	{
-		return "mouse path " + locate(from) + " -> " + locate(to);
-	}
-
-	boolean canRetarget(Point mouse)
-	{
-		MouseLocation current = locate(mouse);
-		return (renderedMouse.selectedBranch && current.selectedBranch)
-			|| (selectedNodes.length == 1 && renderedMouse.plainRoot && current.plainRoot);
-	}
-
-	void setRenderedMouse(Point mouse)
-	{
-		renderedMouse = locate(mouse);
-	}
-
-	private MouseLocation locate(Point mouse)
-	{
-		if (mouse == null)
-		{
-			return MouseLocation.OUTSIDE;
-		}
-		// The deepest selected menu owns overlapping pixels.
-		for (int depth = selectedNodes.length - 1; depth > 0; depth--)
-		{
-			SubmenuTree.Node node = tree.nodes.get(selectedNodes[depth]);
-			int row = boundedRow(node.bounds, node.entries.length, mouse);
-			if (row >= 0)
-			{
-				if (depth == selectedNodes.length - 1)
-				{
-					int entryIndex = node.entries.length - 1 - row;
-					boolean opensUnprovedChild = node.entries[entryIndex] != null
-						&& node.entries[entryIndex].getSubMenu() != null;
-					return new MouseLocation(selectedNodes[depth], row,
-						!opensUnprovedChild, false);
-				}
-				SubmenuTree.Node next = tree.nodes.get(selectedNodes[depth + 1]);
-				if (node.entries.length - 1 - next.parentEntryIndex == row)
-				{
-					return new MouseLocation(selectedNodes[depth], row, true, false);
-				}
-				return new MouseLocation(selectedNodes[depth], row, false, false);
-			}
-		}
-		SubmenuTree.Node root = tree.nodes.get(0);
-		int row = rootViewport == null
-			? boundedRow(root.bounds, root.entries.length, mouse)
-			: rootViewport.hoverIndex(mouse);
-		if (row < 0)
-		{
-			return MouseLocation.OUTSIDE;
-		}
-		if (selectedNodes.length > 1)
-		{
-			SubmenuTree.Node firstChild = tree.nodes.get(selectedNodes[1]);
-			return new MouseLocation(0, row,
-				root.entries.length - 1 - firstChild.parentEntryIndex == row, false);
-		}
-		int entryIndex = root.entries.length - 1 - row;
-		boolean plain = entryIndex >= 0 && entryIndex < root.entries.length
-			&& root.entries[entryIndex] != null && root.entries[entryIndex].getSubMenu() == null;
-		return new MouseLocation(0, row, false, plain);
-	}
-
-	private static int boundedRow(java.awt.Rectangle bounds, int entries, Point mouse)
-	{
-		if (mouse.getX() < bounds.x || mouse.getX() >= bounds.x + bounds.width
-			|| mouse.getY() < bounds.y + MenuRenderer.HEADER_HEIGHT
-			|| mouse.getY() >= bounds.y + bounds.height)
-		{
-			return -1;
-		}
-		int row = (mouse.getY() - bounds.y - MenuRenderer.HEADER_HEIGHT) / MenuRenderer.ROW_HEIGHT;
-		return row < entries ? row : -1;
-	}
-
-	private static final class MouseLocation
-	{
-		private static final MouseLocation OUTSIDE = new MouseLocation(-1, -1, false, false);
-		private final int node;
-		private final int row;
-		private final boolean selectedBranch;
-		private final boolean plainRoot;
-
-		private MouseLocation(int node, int row, boolean selectedBranch, boolean plainRoot)
-		{
-			this.node = node;
-			this.row = row;
-			this.selectedBranch = selectedBranch;
-			this.plainRoot = plainRoot;
-		}
-
-		private boolean sameHover(MouseLocation other)
-		{
-			return node == other.node && row == other.row;
-		}
-
-		@Override
-		public String toString()
-		{
-			return node < 0 ? "outside" : "node=" + node + " row=" + row
-				+ " selected=" + selectedBranch;
-		}
+		return null;
 	}
 
 	private static final class EntryState

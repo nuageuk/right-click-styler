@@ -28,13 +28,60 @@ class MenuOverlay extends Overlay
 	// Diagnostic A/B only. Both paths require the separate submenuPrototype opt-in.
 	private static final boolean HARDENED_LIFECYCLE =
 		!"baseline".equals(System.getProperty("rightclickstyler.submenuLifecycle", "hardened"));
+	// Diagnostic only: proven-chain reuse is evaluated against every probe, never rendered.
+	private static final boolean SUBMENU_SHADOW =
+		!"false".equals(System.getProperty("rightclickstyler.submenuShadow"));
+	private static final int SHADOW_MISMATCH_LOG_LIMIT = 20;
+	private static final int EXACT_DETAIL_LOG_LIMIT = 10;
+	/**
+	 * Opt-in experiment, off by default: themed submenus require a chain the exact-coverage
+	 * reading RESOLVED, and the probe's previous resolver only runs as a shadow comparator.
+	 * Requires the separate submenuPrototype opt-in.
+	 */
+	private static final boolean EXACT_AUTHORITATIVE =
+		Boolean.getBoolean("rightclickstyler.exactCoverageAuthoritative");
+	private static final int EXACT_CONTRADICTION_LOG_LIMIT = 20;
+	/** Compact evidence records between two game ticks; overflow is counted and reported. */
+	private static final int EXACT_EVIDENCE_CAPACITY = 1024;
+
+	/**
+	 * How the exact-coverage reading ("new") compares with the probe's previous resolver
+	 * ("old") on one frame. The declaration order fixes the frame trace codes {@code .aDkRbf}.
+	 */
+	enum ExactComparison
+	{
+		/** The exact reading did not run: shadow disabled, or the draw never reached the marked root. */
+		NOT_EVALUATED,
+		/** Both resolved the same chain. */
+		AGREE,
+		/** Both resolved a chain, and the chains differ. Never rendered in authoritative mode. */
+		CONTRADICTORY,
+		/** The old resolver proved a chain; the exact reading did not resolve one. */
+		OLD_RESOLVED_NEW_UNRESOLVED,
+		/** The old resolver was ambiguous; the exact reading resolved a chain. */
+		OLD_AMBIGUOUS_NEW_RESOLVED,
+		/** The old resolver was ambiguous and the exact reading did not resolve a chain. */
+		BOTH_UNRESOLVED,
+		/** A buffer, restore or geometry check failed, so neither reading may be used. */
+		OLD_FAILED
+	}
 
 	static boolean hardenedLifecycle()
 	{
 		return HARDENED_LIFECYCLE;
 	}
 
-	private enum PrototypeOutcome
+	static boolean exactCoverageAuthoritativeDefault()
+	{
+		return EXACT_AUTHORITATIVE;
+	}
+
+	static boolean submenuShadowEnabled()
+	{
+		return SUBMENU_SHADOW;
+	}
+
+	enum PrototypeOutcome
 	{
 		READY_ROOT_ONLY,
 		READY_WITH_CHILD,
@@ -54,6 +101,10 @@ class MenuOverlay extends Overlay
 		FALLBACK_SCROLLABLE,
 		FALLBACK_ALREADY_CONSUMED,
 		FALLBACK_TRANSIENT,
+		/** Authoritative mode: the exact reading was unevidenced, unexplained or failed. */
+		FALLBACK_EXACT_UNRESOLVED,
+		/** Authoritative mode: the two resolvers proved different chains. Neither is drawn. */
+		FALLBACK_EXACT_CONTRADICTION,
 		FALLBACK_OTHER
 	}
 
@@ -62,6 +113,38 @@ class MenuOverlay extends Overlay
 	private final ThemeManager themeManager;
 	private final MenuRenderer renderer = new MenuRenderer();
 	private final SubmenuPrototypeProbe prototypeProbe = new SubmenuPrototypeProbe();
+	private final SubmenuChainShadow shadow = new SubmenuChainShadow();
+	private SubmenuChainShadow.Decision shadowDecision;
+	private boolean shadowFailed;
+	private final long[] shadowDecisions = new long[SubmenuChainShadow.Kind.values().length];
+	private final long[] shadowProbeReasons = new long[SubmenuChainShadow.ProbeReason.values().length];
+	private final long[][] shadowVerdicts =
+		new long[SubmenuChainShadow.Kind.values().length][SubmenuChainShadow.Verdict.values().length];
+	private final long[] shadowSettledMatchAges = new long[SubmenuChainShadow.MAX_SETTLED_REUSE_CYCLES + 1];
+	private long shadowNanos;
+	private long shadowMaxNanos;
+	private long shadowFrames;
+	private long shadowMismatchLogs;
+	private final long[] exactComparisons = new long[ExactComparison.values().length];
+	private final long[] exactStates = new long[ExactCoverageResolver.State.values().length];
+	private long exactNanos;
+	private long exactMaxNanos;
+	private long exactFrames;
+	private long exactDetailLogs;
+	private long exactDetailSuppressed;
+	private long exactContradictionLogs;
+	private long exactContradictionSuppressed;
+	private ExactComparison lastExactComparison = ExactComparison.NOT_EVALUATED;
+	/** Fixed at launch from the system property; tests set it per overlay. */
+	private boolean exactAuthoritative = EXACT_AUTHORITATIVE;
+	/** Set when exact-coverage bookkeeping throws. Rendering decisions never depend on it. */
+	private boolean exactDiagnosticsFailed;
+	private boolean streamFailed;
+	private final BoundedEvidenceLog exactEvidence = new BoundedEvidenceLog(EXACT_EVIDENCE_CAPACITY);
+	private long exactEvidenceRecorded;
+	private long exactEvidenceEmitted;
+	private long exactEvidenceDropped;
+	private PrototypeOutcome lastOutcome;
 	private final List<MenuRenderer.Row> rows = new ArrayList<>();
 	private final List<MenuRenderer.Row> rowPool = new ArrayList<>();
 	private final Rectangle bounds = new Rectangle();
@@ -71,12 +154,6 @@ class MenuOverlay extends Overlay
 	private int preparedY;
 	private Menu preparedRoot;
 	private PreparedMenuState preparedState;
-	private SubmenuTree preparedTree;
-	private int[] preparedChain;
-	private ScrollableMenuViewport preparedViewport;
-	private Rectangle preparedRegion;
-	private Theme preparedTheme;
-	private int preparedLocalLevel;
 	private boolean preparedScrollable;
 	private int preparedScroll;
 	private boolean prepared;
@@ -100,6 +177,28 @@ class MenuOverlay extends Overlay
 	private long prototypeReentrantEvents;
 	private long prototypeBlitFailures;
 	private boolean prototypeBlitFailed;
+	// Streamed on every game tick (about 0.6s), so the ring only has to span a stalled tick.
+	// A 5s window of 719 frames overflowed the former 512-frame ring in a live trace.
+	private static final int FRAME_TRACE_CAPACITY = 2048;
+	private final FrameTrace[] frameTraces = new FrameTrace[FRAME_TRACE_CAPACITY];
+	private long frameSequence;
+	private long lastReportedFrame;
+	private FrameTrace currentFrameTrace;
+	private FrameTrace preparedFrameTrace;
+	/** The single mouse sample for the frame being prepared; diagnostics only. */
+	private Point currentFrameMouse;
+	private long prototypeConsumed;
+	private long prototypeFinalNanos;
+	private long prototypeMaxFinalNanos;
+	private long prototypeFinalFrames;
+	private long preparedAtNanos;
+	private long prototypeReadyToFinalNanos;
+	private long prototypeMaxReadyToFinalNanos;
+	private long prototypeProbeSamples;
+	private long prototypeCandidateObservations;
+	private long prototypeVisibleCandidates;
+	private long prototypeCandidatePixels;
+	private int prototypeMaxVisibleCandidates;
 
 	/**
 	 * Set after the first render failure. The plugin consumes {@code BeforeMenuRender}, so a render
@@ -120,7 +219,20 @@ class MenuOverlay extends Overlay
 		{
 			log.info("Submenu prototype diagnostic lifecycle={}",
 				HARDENED_LIFECYCLE ? "hardened" : "baseline");
+			log.info("Submenu frame codes: H=child R=root T=detached-child F=fallback; C=consumed; B=blit N=native D=late-drop; durations are microseconds");
+			log.info("Submenu exact-coverage codes (old=previous resolver, new=exact coverage): .=not evaluated a=agree D=CONTRADICTORY k=old resolved/new unresolved R=old ambiguous/new resolved b=both unresolved f=framebuffer check failed");
+			log.info("Submenu shadow codes: .=no decision -=probe s/S=same-cycle/settled reuse matched x/X=mismatched u/U=unverified (probe not a proof); never rendered");
 		}
+		if (EXACT_AUTHORITATIVE)
+		{
+			log.info("Submenu exact-coverage resolution is AUTHORITATIVE: themed submenus need a unique exact-coverage chain; the previous resolver is a shadow comparator");
+		}
+	}
+
+	/** Tests only: production fixes the mode at launch from the system property. */
+	synchronized void setExactCoverageAuthoritative(boolean authoritative)
+	{
+		exactAuthoritative = authoritative;
 	}
 
 	void resetFailure()
@@ -128,6 +240,29 @@ class MenuOverlay extends Overlay
 		failed = false;
 		prototypeBlitFailed = false;
 		clearPrepared();
+		synchronized (this)
+		{
+			shadowFailed = false;
+			shadow.invalidate();
+			exactDiagnosticsFailed = false;
+			streamFailed = false;
+		}
+	}
+
+	/** RuneLite reuses the root Menu object, so a new opening must end any chain proof. */
+	synchronized void menuOpened()
+	{
+		if (HARDENED_LIFECYCLE)
+		{
+			clearPrepared();
+		}
+		shadow.menuOpened();
+	}
+
+	/** A BeforeMenuRender the prototype did not prepare: no proof may survive it. */
+	synchronized void invalidateSubmenuShadow()
+	{
+		shadow.invalidate();
 	}
 
 	synchronized void discardPreparedAtEventStart()
@@ -142,6 +277,15 @@ class MenuOverlay extends Overlay
 	synchronized void recordAlreadyConsumedSubmenu()
 	{
 		prototypeCalls++;
+		if (SUBMENU_TRACE)
+		{
+			currentFrameTrace = nextFrameTrace(0);
+			currentFrameTrace.finalized = true;
+		}
+		else
+		{
+			frameSequence++;
+		}
 		recordOutcome(PrototypeOutcome.FALLBACK_ALREADY_CONSUMED);
 		prototypeTransition("FALLBACK_ALREADY_CONSUMED", null, null, 0);
 	}
@@ -153,40 +297,143 @@ class MenuOverlay extends Overlay
 
 	private void recordOutcome(PrototypeOutcome outcome)
 	{
+		lastOutcome = outcome;
 		prototypeOutcomes[outcome.ordinal()]++;
+		if (SUBMENU_TRACE && currentFrameTrace != null)
+		{
+			currentFrameTrace.outcome = outcome;
+		}
 	}
 
-	/** Prepares submenu menus and scrollable roots only under the explicit prototype flag. */
-	synchronized boolean prepareSubmenuFrame(Menu root, MenuEntry[] rootEntries)
+	private FrameTrace nextFrameTrace(int scroll)
+	{
+		long id = ++frameSequence;
+		int slot = (int) (id % FRAME_TRACE_CAPACITY);
+		FrameTrace trace = frameTraces[slot];
+		if (trace == null)
+		{
+			trace = new FrameTrace();
+			frameTraces[slot] = trace;
+		}
+		trace.reset(id, scroll);
+		return trace;
+	}
+
+	private static final class FrameTrace
+	{
+		private long id;
+		private long timeMs;
+		private long startNanos;
+		private long preparationNanos;
+		private long finalNanos;
+		private long readyToFinalNanos;
+		private long probeNanos;
+		private long exactNanos;
+		private long candidatePixels;
+		private int scroll;
+		private int candidates;
+		private int visibleCandidates;
+		private int selected = -1;
+		private int nativeDraws;
+		private PrototypeOutcome outcome;
+		private boolean consumed;
+		private boolean finalized;
+		private boolean blitted;
+		private String finalReason;
+		private char shadow = '.';
+		private char exact = '.';
+
+		private void reset(long frameId, int menuScroll)
+		{
+			id = frameId;
+			timeMs = System.currentTimeMillis();
+			startNanos = System.nanoTime();
+			preparationNanos = finalNanos = readyToFinalNanos = probeNanos = exactNanos = candidatePixels = 0;
+			scroll = menuScroll;
+			candidates = visibleCandidates = nativeDraws = 0;
+			selected = -1;
+			outcome = null;
+			consumed = finalized = blitted = false;
+			finalReason = null;
+			shadow = '.';
+			exact = '.';
+		}
+	}
+
+	private static void noteFinalReason(FrameTrace trace, String reason)
+	{
+		if (trace != null)
+		{
+			trace.finalReason = reason;
+		}
+	}
+
+	synchronized void recordSubmenuConsumed()
+	{
+		prototypeConsumed++;
+		if (SUBMENU_TRACE && preparedFrameTrace != null)
+		{
+			preparedFrameTrace.consumed = true;
+		}
+	}
+
+	/**
+	 * Prepares submenu menus and scrollable roots only under the explicit prototype flag.
+	 *
+	 * @param frameMouse the one mouse sample taken when {@code BeforeMenuRender} began. It is the
+	 * only mouse position used for this frame: the native probe proves which submenus are open
+	 * in this client cycle, and that state cannot change until the next cycle, so the live
+	 * pointer is never re-read to revalidate the frame.
+	 */
+	synchronized boolean prepareSubmenuFrame(Menu root, MenuEntry[] rootEntries, Point frameMouse)
 	{
 		prepared = false;
 		preparedRoot = null;
 		preparedState = null;
-		preparedTree = null;
-		preparedChain = null;
-		preparedViewport = null;
-		preparedRegion = null;
-		preparedTheme = null;
+		currentFrameMouse = frameMouse;
+		shadowDecision = null;
 		prototypeCalls++;
+		currentFrameTrace = SUBMENU_TRACE ? nextFrameTrace(0) : null;
+		if (!SUBMENU_TRACE)
+		{
+			frameSequence++;
+		}
 		if (!client.isMenuOpen())
 		{
+			shadow.invalidate();
 			recordOutcome(PrototypeOutcome.FALLBACK_TRANSIENT);
+			if (currentFrameTrace != null)
+			{
+				currentFrameTrace.finalized = true;
+			}
 			prototypeTransition(PrototypeOutcome.FALLBACK_TRANSIENT.name(), null, null, 0);
 			return false;
 		}
 		boolean scrollable = client.isMenuScrollable();
 		int scroll = scrollable ? client.getMenuScroll() : 0;
-		Point probeMouse = HARDENED_LIFECYCLE ? client.getMouseCanvasPosition() : null;
+		if (currentFrameTrace != null)
+		{
+			currentFrameTrace.scroll = scroll;
+		}
 		long start = System.nanoTime();
 		if (prototypeBlitFailed)
 		{
+			shadow.invalidate();
 			recordOutcome(PrototypeOutcome.FALLBACK_RENDER_EXCEPTION);
+			if (currentFrameTrace != null)
+			{
+				currentFrameTrace.finalized = true;
+			}
 			prototypeTransition("FALLBACK_RENDER_EXCEPTION: final blit disabled prototype", null, null, 0);
 			return false;
 		}
 		boolean preparingTheme = false;
 		SubmenuPrototypeProbe.Result timingResult = null;
 		long timingProbeCallNanos = 0;
+		boolean authoritative = exactAuthoritative;
+		SubmenuPrototypeProbe.Result evidenceResult = null;
+		SubmenuTree evidenceTree = null;
+		ExactComparison evidenceComparison = null;
 		try
 		{
 			int canvasWidth = client.getCanvasWidth();
@@ -194,6 +441,7 @@ class MenuOverlay extends Overlay
 			if (canvasWidth <= 0 || canvasHeight <= 0
 				|| (long) canvasWidth * canvasHeight > 8_388_608L)
 			{
+				shadow.invalidate();
 				recordOutcome(PrototypeOutcome.FALLBACK_INVALID_BOUNDS);
 				prototypeTransition("FALLBACK_INVALID_BOUNDS: invalid canvas dimensions", null, null, 0);
 				return false;
@@ -204,14 +452,23 @@ class MenuOverlay extends Overlay
 				canvasWidth, canvasHeight, scrollable, scroll);
 			if (viewport == null)
 			{
+				shadow.invalidate();
 				recordOutcome(PrototypeOutcome.FALLBACK_SCROLLABLE);
 				prototypeTransition("FALLBACK_SCROLLABLE: invalid root scroll viewport", null, null, 0);
 				return false;
 			}
 			SubmenuTree tree = SubmenuTree.capture(root, rootEntries,
 				scrollable ? viewport.firstRow : 0);
+			// Decided from public state and the frame sample before the probe can inform it.
+			shadowDecide(root, tree, viewport, scrollable, scroll, canvasWidth, canvasHeight, frameMouse);
+			prototypeProbe.requireExact(authoritative);
 			long probeStart = System.nanoTime();
 			SubmenuPrototypeProbe.Result result = prototypeProbe.probe(client, tree);
+			prototypeProbeSamples++;
+			if (currentFrameTrace != null)
+			{
+				currentFrameTrace.nativeDraws += result.drawPasses;
+			}
 			long nativeDrawNanos = result.drawNanos;
 			if (result.state == SubmenuPrototypeProbe.State.GEOMETRY_CHANGED)
 			{
@@ -220,44 +477,105 @@ class MenuOverlay extends Overlay
 				tree = SubmenuTree.capture(root, root.getMenuEntries(),
 					scrollable ? viewport.firstRow : 0);
 				result = prototypeProbe.probe(client, tree);
+				prototypeProbeSamples++;
+				if (currentFrameTrace != null)
+				{
+					currentFrameTrace.nativeDraws += result.drawPasses;
+				}
 				nativeDrawNanos += result.drawNanos;
 				viewport = ScrollableMenuViewport.capture(tree.nodes.get(0).bounds,
 					tree.nodes.get(0).entries.length, canvasWidth, canvasHeight,
 					scrollable, scroll);
 			}
 			long probeCallNanos = System.nanoTime() - probeStart;
+			// Pure classification: the authoritative decision below depends on it, so it
+			// never goes through the guarded diagnostic bookkeeping.
+			ExactComparison comparison = classifyExact(result);
+			exactRecord(result, tree, comparison, authoritative);
+			if ((authoritative || SUBMENU_TRACE)
+				&& (comparison == ExactComparison.OLD_AMBIGUOUS_NEW_RESOLVED
+					|| comparison == ExactComparison.OLD_RESOLVED_NEW_UNRESOLVED))
+			{
+				evidenceResult = result;
+				evidenceTree = tree;
+				evidenceComparison = comparison;
+			}
 			timingResult = result;
 			timingProbeCallNanos = probeCallNanos;
 			prototypeProbeNanos += probeCallNanos;
 			prototypeDrawNanos += nativeDrawNanos;
+			prototypeVisibleCandidates += result.visibleCandidates;
+			prototypeCandidatePixels += result.candidatePixels;
+			prototypeCandidateObservations++;
+			prototypeMaxVisibleCandidates = Math.max(prototypeMaxVisibleCandidates,
+				result.visibleCandidates);
+			if (currentFrameTrace != null)
+			{
+				currentFrameTrace.probeNanos += probeCallNanos;
+				currentFrameTrace.candidates = tree.candidateBounds.size();
+				currentFrameTrace.visibleCandidates = result.visibleCandidates;
+				currentFrameTrace.candidatePixels = result.candidatePixels;
+				currentFrameTrace.selected = result.activeChain.length == 0 ? -1
+					: result.activeChain[result.activeChain.length - 1];
+			}
 			if (viewport == null || client.isMenuScrollable() != scrollable
 				|| (scrollable && client.getMenuScroll() != scroll))
 			{
+				shadowUnproven();
 				recordOutcome(PrototypeOutcome.FALLBACK_SCROLLABLE);
 				prototypeTransition("FALLBACK_SCROLLABLE: scroll state changed during probe",
 					result, tree, probeCallNanos);
 				return false;
 			}
-			if (result.state != SubmenuPrototypeProbe.State.NO_CHILD
-				&& result.state != SubmenuPrototypeProbe.State.ACTIVE)
+			int[] chain;
+			if (authoritative)
 			{
-				PrototypeOutcome outcome = failureOutcome(result);
-				recordOutcome(outcome);
-				prototypeTransition(outcome + ": " + result.reason, result, tree, probeCallNanos);
-				return false;
+				// The exact reading decides. Anything but one uniquely resolved chain on a
+				// verified framebuffer stays native: no guess, no forced selection.
+				PrototypeOutcome rejection = authoritativeRejection(result, tree);
+				if (rejection != null)
+				{
+					shadowUnproven();
+					recordOutcome(rejection);
+					prototypeTransition(rejection + ": " + result.reason + " exact=" + result.exact,
+						result, tree, probeCallNanos);
+					return false;
+				}
+				chain = result.exact.chain;
+			}
+			else
+			{
+				if (result.state != SubmenuPrototypeProbe.State.NO_CHILD
+					&& result.state != SubmenuPrototypeProbe.State.ACTIVE)
+				{
+					shadowUnproven();
+					PrototypeOutcome outcome = failureOutcome(result);
+					recordOutcome(outcome);
+					prototypeTransition(outcome + ": " + result.reason, result, tree, probeCallNanos);
+					return false;
+				}
+				chain = result.activeChain;
+			}
+			if (currentFrameTrace != null)
+			{
+				currentFrameTrace.selected = chain.length == 0 ? -1 : chain[chain.length - 1];
 			}
 			ScrollChildValidation childValidation = scrollable
-				? validateScrolledChild(tree, result.activeChain, viewport, canvasHeight, result)
+				? validateScrolledChild(tree, chain, viewport, canvasHeight, result, authoritative)
 				: ScrollChildValidation.ATTACHED;
 			if (childValidation.reason != null)
 			{
+				shadowUnproven();
 				recordOutcome(PrototypeOutcome.FALLBACK_SCROLLABLE);
 				prototypeTransition("FALLBACK_SCROLLABLE: " + childValidation.reason,
 					result, tree, probeCallNanos);
 				return false;
 			}
+			// Every production check on the probe has passed: this result is a proof.
+			shadowProven(root, tree, viewport, scrollable, scroll, canvasWidth, canvasHeight,
+				frameMouse, chain);
 			Rectangle region = new Rectangle(tree.nodes.get(0).bounds);
-			for (int candidate : result.activeChain)
+			for (int candidate : chain)
 			{
 				region.add(tree.nodes.get(candidate + 1).bounds);
 			}
@@ -274,19 +592,15 @@ class MenuOverlay extends Overlay
 			{
 				prototypeImage = new BufferedImage(region.width, region.height, BufferedImage.TYPE_INT_ARGB);
 			}
-			Point renderMouse = client.getMouseCanvasPosition();
 			PreparedMenuState state = null;
 			if (HARDENED_LIFECYCLE)
 			{
-				state = PreparedMenuState.capture(tree, result.activeChain,
-					renderMouse, viewport);
-				String mismatch = state.mismatchReason(client.getMenu(), renderMouse);
-				if (!state.allowsMovement(probeMouse, renderMouse) || mismatch != null)
+				state = PreparedMenuState.capture(tree, chain);
+				String mismatch = state.mismatchReason(client.getMenu());
+				if (mismatch != null)
 				{
 					recordOutcome(PrototypeOutcome.FALLBACK_TRANSIENT);
-					prototypeTransition("FALLBACK_TRANSIENT: " + (mismatch == null
-						? state.movementReason(probeMouse, renderMouse) : mismatch)
-						+ " probeMouse=" + probeMouse + " validationMouse=" + renderMouse,
+					prototypeTransition("FALLBACK_TRANSIENT: " + mismatch + " frameMouse=" + frameMouse,
 						result, tree, probeCallNanos);
 					return false;
 				}
@@ -295,82 +609,47 @@ class MenuOverlay extends Overlay
 			Theme theme = themeManager.effectiveTheme();
 			Player player = client.getLocalPlayer();
 			int localLevel = player == null ? 0 : player.getCombatLevel();
-			if (!HARDENED_LIFECYCLE)
+			long renderStart = System.nanoTime();
+			renderPrototypeImage(tree, chain, viewport, region,
+				frameMouse, scroll, theme, localLevel);
+			prototypeRenderNanos += System.nanoTime() - renderStart;
+			if (HARDENED_LIFECYCLE)
 			{
-				long renderStart = System.nanoTime();
-				renderPrototypeImage(tree, result.activeChain, viewport, region,
-					renderMouse, scroll, theme, localLevel);
-				prototypeRenderNanos += System.nanoTime() - renderStart;
-			}
-			else
-			{
-				for (int attempt = 0; ; attempt++)
+				// Structural state only: the frame's mouse sample is fixed, so pointer
+				// movement since the sample is not a reason to discard native proof.
+				String mismatch = !client.isMenuOpen() ? "menu closed"
+					: client.isMenuScrollable() != scrollable
+						|| (scrollable && client.getMenuScroll() != scroll) ? "scroll state"
+					: state.mismatchReason(client.getMenu());
+				if (mismatch != null)
 				{
-					long renderStart = System.nanoTime();
-					renderPrototypeImage(tree, result.activeChain, viewport, region,
-						renderMouse, scroll, theme, localLevel);
-					prototypeRenderNanos += System.nanoTime() - renderStart;
-					Point currentMouse = null;
-					String mismatch;
-					if (!client.isMenuOpen())
-					{
-						mismatch = "menu closed";
-					}
-					else if (client.isMenuScrollable() != scrollable
-						|| (scrollable && client.getMenuScroll() != scroll))
-					{
-						mismatch = "scroll state";
-					}
-					else
-					{
-						currentMouse = client.getMouseCanvasPosition();
-						mismatch = state.mismatchReason(client.getMenu(), currentMouse);
-						if (mismatch != null && mismatch.startsWith("mouse hover ")
-							&& attempt < 2 && state.allowsMovement(renderMouse, currentMouse))
-						{
-							renderMouse = currentMouse;
-							state.setRenderedMouse(renderMouse);
-							continue;
-						}
-					}
-					if (mismatch != null)
-					{
-						recordOutcome(PrototypeOutcome.FALLBACK_TRANSIENT);
-						prototypeTransition("FALLBACK_TRANSIENT: " + mismatch
-							+ " renderedMouse=" + renderMouse + " validationMouse=" + currentMouse,
-							result, tree, probeCallNanos);
-						return false;
-					}
-					break;
+					recordOutcome(PrototypeOutcome.FALLBACK_TRANSIENT);
+					prototypeTransition("FALLBACK_TRANSIENT: " + mismatch + " after theme render frameMouse="
+						+ frameMouse, result, tree, probeCallNanos);
+					return false;
 				}
 			}
 			preparedX = region.x;
 			preparedY = region.y;
 			preparedRoot = tree.root;
-			if (HARDENED_LIFECYCLE)
-			{
-				preparedState = state;
-				preparedTree = tree;
-				preparedChain = result.activeChain;
-				preparedViewport = viewport;
-				preparedRegion = region;
-				preparedTheme = theme;
-				preparedLocalLevel = localLevel;
-			}
+			preparedState = state;
 			preparedScrollable = scrollable;
 			preparedScroll = scroll;
 			prepared = true;
+			preparedAtNanos = System.nanoTime();
+			preparedFrameTrace = currentFrameTrace;
 			prototypeReady++;
-			PrototypeOutcome readyOutcome = result.state == SubmenuPrototypeProbe.State.NO_CHILD
+			PrototypeOutcome readyOutcome = chain.length == 0
 				? PrototypeOutcome.READY_ROOT_ONLY
 				: childValidation.detached ? PrototypeOutcome.READY_WITH_NATIVE_DETACHED_CHILD
 				: PrototypeOutcome.READY_WITH_CHILD;
 			recordOutcome(readyOutcome);
-			prototypeTransition(readyOutcome.name(), result, tree, probeCallNanos);
+			prototypeTransition(readyOutcome.name(), result, tree, probeCallNanos, chain);
 			return true;
 		}
 		catch (IllegalArgumentException e)
 		{
+			shadowAbort();
 			clearPrepared();
 			PrototypeOutcome outcome = preparingTheme ? PrototypeOutcome.FALLBACK_RENDER_EXCEPTION
 				: treeFailureOutcome(e.getMessage());
@@ -401,6 +680,7 @@ class MenuOverlay extends Overlay
 		}
 		catch (RuntimeException e)
 		{
+			shadowAbort();
 			clearPrepared();
 			PrototypeOutcome outcome = preparingTheme
 				? PrototypeOutcome.FALLBACK_RENDER_EXCEPTION : PrototypeOutcome.FALLBACK_PROBE_EXCEPTION;
@@ -419,6 +699,19 @@ class MenuOverlay extends Overlay
 			long elapsed = System.nanoTime() - start;
 			prototypeTotalNanos += elapsed;
 			prototypeMaxNanos = Math.max(prototypeMaxNanos, elapsed);
+			if (currentFrameTrace != null)
+			{
+				currentFrameTrace.preparationNanos = elapsed;
+				if (!prepared)
+				{
+					currentFrameTrace.finalized = true;
+				}
+			}
+			if (evidenceResult != null)
+			{
+				recordExactEvidence(evidenceResult, evidenceTree, evidenceComparison, authoritative,
+					lastOutcome, scroll, elapsed);
+			}
 			long now = System.nanoTime();
 			if (elapsed >= 10_000_000L
 				&& now - prototypeLastSlowProbeLog >= 3_000_000_000L)
@@ -438,6 +731,436 @@ class MenuOverlay extends Overlay
 					timingResult == null ? 0 : timingResult.allocatedBytesMin);
 			}
 		}
+	}
+
+	/**
+	 * Compares the exact reading ("new") with the probe's previous resolver ("old"). Pure and
+	 * total over every probe result, so the authoritative decision can rely on it. An exact
+	 * ERROR counts as unresolved: it never proves a chain.
+	 */
+	static ExactComparison classifyExact(SubmenuPrototypeProbe.Result result)
+	{
+		ExactCoverageResolver.Outcome exact = result.exact;
+		if (exact == null || exact.state == ExactCoverageResolver.State.NOT_EVALUATED)
+		{
+			return ExactComparison.NOT_EVALUATED;
+		}
+		if (!result.framebufferVerified)
+		{
+			return ExactComparison.OLD_FAILED;
+		}
+		boolean resolved = exact.state == ExactCoverageResolver.State.RESOLVED;
+		if (result.state == SubmenuPrototypeProbe.State.NO_CHILD
+			|| result.state == SubmenuPrototypeProbe.State.ACTIVE)
+		{
+			return !resolved ? ExactComparison.OLD_RESOLVED_NEW_UNRESOLVED
+				: Arrays.equals(exact.chain, result.activeChain) ? ExactComparison.AGREE
+				: ExactComparison.CONTRADICTORY;
+		}
+		if (result.state == SubmenuPrototypeProbe.State.AMBIGUOUS)
+		{
+			return resolved ? ExactComparison.OLD_AMBIGUOUS_NEW_RESOLVED : ExactComparison.BOTH_UNRESOLVED;
+		}
+		return ExactComparison.OLD_FAILED;
+	}
+
+	/**
+	 * Authoritative mode's gate: null only for one uniquely resolved, well-formed exact chain on
+	 * a verified framebuffer that the previous resolver does not contradict. Every later
+	 * structural, scroll and lifecycle check still applies to the chain it lets through.
+	 */
+	static PrototypeOutcome authoritativeRejection(SubmenuPrototypeProbe.Result result, SubmenuTree tree)
+	{
+		if (!result.framebufferVerified)
+		{
+			// Buffer, restore and geometry failures keep their existing outcomes.
+			return failureOutcome(result);
+		}
+		ExactCoverageResolver.Outcome exact = result.exact;
+		if (exact == null || exact.state == ExactCoverageResolver.State.AMBIGUOUS)
+		{
+			return PrototypeOutcome.FALLBACK_AMBIGUOUS;
+		}
+		if (exact.state != ExactCoverageResolver.State.RESOLVED || exact.explainingChains != 1
+			|| !wellFormedChain(exact.chain, tree))
+		{
+			return PrototypeOutcome.FALLBACK_EXACT_UNRESOLVED;
+		}
+		if (classifyExact(result) == ExactComparison.CONTRADICTORY)
+		{
+			return PrototypeOutcome.FALLBACK_EXACT_CONTRADICTION;
+		}
+		return null;
+	}
+
+	/** Each member is a real candidate whose parent is the previous member (the root first). */
+	private static boolean wellFormedChain(int[] chain, SubmenuTree tree)
+	{
+		int parent = -1;
+		for (int candidate : chain)
+		{
+			if (candidate < 0 || candidate >= tree.candidateParents.size()
+				|| tree.candidateParents.get(candidate) != parent)
+			{
+				return false;
+			}
+			parent = candidate;
+		}
+		return true;
+	}
+
+	/** Bookkeeping only: a failure here disables exact diagnostics and never reaches rendering. */
+	private void exactRecord(SubmenuPrototypeProbe.Result result, SubmenuTree tree,
+		ExactComparison comparison, boolean authoritative)
+	{
+		lastExactComparison = comparison;
+		if (exactDiagnosticsFailed)
+		{
+			return;
+		}
+		try
+		{
+			ExactCoverageResolver.Outcome exact = result.exact;
+			exactStates[exact.state.ordinal()]++;
+			if (exact.state != ExactCoverageResolver.State.NOT_EVALUATED)
+			{
+				exactNanos += exact.nanos;
+				exactMaxNanos = Math.max(exactMaxNanos, exact.nanos);
+				exactFrames++;
+			}
+			exactComparisons[comparison.ordinal()]++;
+			if (currentFrameTrace != null)
+			{
+				currentFrameTrace.exact = ".aDkRbf".charAt(comparison.ordinal()); // enum order
+				currentFrameTrace.exactNanos = exact.nanos;
+			}
+			if (comparison == ExactComparison.CONTRADICTORY)
+			{
+				logContradiction(result, tree, authoritative);
+			}
+			else if (!authoritative && !SUBMENU_TRACE
+				&& (comparison == ExactComparison.OLD_RESOLVED_NEW_UNRESOLVED
+					|| comparison == ExactComparison.OLD_AMBIGUOUS_NEW_RESOLVED))
+			{
+				// Without the evidence stream (authoritative mode or the trace), keep a sample.
+				if (exactDetailLogs++ < EXACT_DETAIL_LOG_LIMIT)
+				{
+					log.info("Submenu exact-coverage {} frame={} probe={} probeChain={} exact={} exactBounds={} probeBounds={} scroll={}",
+						comparison, currentFrameTrace == null ? frameSequence : currentFrameTrace.id,
+						result.state + ": " + result.reason, Arrays.toString(result.activeChain), exact,
+						chainBounds(tree, exact.chain), chainBounds(tree, result.activeChain), client.getMenuScroll());
+				}
+				else
+				{
+					exactDetailSuppressed++;
+				}
+			}
+		}
+		catch (RuntimeException e)
+		{
+			disableExactDiagnostics(e);
+		}
+	}
+
+	/** Both resolvers proved a chain and they differ: always prominent, never silently capped. */
+	private void logContradiction(SubmenuPrototypeProbe.Result result, SubmenuTree tree, boolean authoritative)
+	{
+		if (exactContradictionLogs++ >= EXACT_CONTRADICTION_LOG_LIMIT)
+		{
+			exactContradictionSuppressed++;
+			return;
+		}
+		log.warn("SUBMENU EXACT-COVERAGE CONTRADICTION frame={} action={} probe={} probeChain={} exact={} exactChain={} covered={} scroll={} root={} canvas={}x{} candidates={} bounds={} parents={} witnesses={} changed={} sharedWitnesses={} sharedChanged={}",
+			currentFrameTrace == null ? frameSequence : currentFrameTrace.id,
+			authoritative ? "native fallback; neither chain drawn" : "shadow only; the previous resolver decides",
+			result.state + ": " + result.reason, chainBounds(tree, result.activeChain), result.exact,
+			chainBounds(tree, result.exact.chain), chainBounds(tree, result.exact.covered),
+			client.getMenuScroll(), tree.nodes.get(0).bounds, client.getCanvasWidth(), client.getCanvasHeight(),
+			tree.candidateBounds.size(), tree.candidateBounds, tree.candidateParents,
+			Arrays.toString(result.witnesses), Arrays.toString(result.changed),
+			Arrays.toString(result.sharedWitnesses), Arrays.toString(result.sharedChanged));
+	}
+
+	/**
+	 * One compact record for a frame the two resolvers decided differently without
+	 * contradicting each other: every promoted resolution (old ambiguous, new resolved) and
+	 * every withdrawn one (old resolved, new unresolved). Queued; logged on the next game tick.
+	 */
+	private void recordExactEvidence(SubmenuPrototypeProbe.Result result, SubmenuTree tree,
+		ExactComparison comparison, boolean authoritative, PrototypeOutcome outcome, int scroll,
+		long prepareNanos)
+	{
+		if (exactDiagnosticsFailed)
+		{
+			return;
+		}
+		try
+		{
+			boolean ready = outcome != null && outcome.name().startsWith("READY");
+			int[] rendered = !ready ? null : authoritative ? result.exact.chain : result.activeChain;
+			String record = "frame=" + (currentFrameTrace == null ? frameSequence : currentFrameTrace.id)
+				+ " mode=" + (authoritative ? "authoritative" : "shadow")
+				+ " comparison=" + comparison
+				+ " outcome=" + outcome
+				+ " rendered=" + (rendered == null ? "none" : chainBounds(tree, rendered))
+				+ " exact=" + result.exact.state
+				+ " exactChain=" + chainBounds(tree, result.exact.chain)
+				+ " explaining=" + result.exact.explainingChains
+				+ " covered=" + chainBounds(tree, result.exact.covered)
+				+ " changedPixels=" + result.exact.changedPixels
+				+ " probe=" + result.state + ":" + result.reason
+				+ " probeChain=" + chainBounds(tree, result.activeChain)
+				+ " footprintMatches=" + result.footprintMatches
+				+ " candidates=" + tree.candidateBounds.size()
+				+ " visible=" + result.visibleCandidates
+				+ " scroll=" + scroll
+				+ " root=" + rectangle(tree.nodes.get(0).bounds)
+				+ " exactUs=" + result.exact.nanos / 1_000
+				+ " prepUs=" + prepareNanos / 1_000;
+			exactEvidenceRecorded++;
+			exactEvidence.offer(record);
+		}
+		catch (RuntimeException e)
+		{
+			disableExactDiagnostics(e);
+		}
+	}
+
+	private static String rectangle(Rectangle bounds)
+	{
+		return bounds.x + "," + bounds.y + "," + bounds.width + "x" + bounds.height;
+	}
+
+	private void disableExactDiagnostics(RuntimeException e)
+	{
+		exactDiagnosticsFailed = true;
+		log.warn("Submenu exact-coverage diagnostics failed and are disabled; rendering decisions are unaffected", e);
+	}
+
+	private static String chainBounds(SubmenuTree tree, int[] chain)
+	{
+		StringBuilder text = new StringBuilder("[");
+		for (int candidate : chain)
+		{
+			if (candidate >= 0 && candidate < tree.candidateBounds.size())
+			{
+				Rectangle bounds = tree.candidateBounds.get(candidate);
+				text.append(text.length() > 1 ? " " : "").append(candidate).append('=')
+					.append(bounds.x).append(',').append(bounds.y).append(',')
+					.append(bounds.width).append('x').append(bounds.height);
+			}
+		}
+		return text.append(']').toString();
+	}
+
+	private void reportExact()
+	{
+		StringBuilder comparisons = new StringBuilder();
+		for (ExactComparison comparison : ExactComparison.values())
+		{
+			comparisons.append(' ').append(comparison).append('=').append(exactComparisons[comparison.ordinal()]);
+		}
+		StringBuilder states = new StringBuilder();
+		for (ExactCoverageResolver.State state : ExactCoverageResolver.State.values())
+		{
+			states.append(' ').append(state).append('=').append(exactStates[state.ordinal()]);
+		}
+		// Resolver cost and whole-frame preparation cost, measured separately over one window.
+		// Preparation includes the resolver, which runs inside the probe.
+		log.info("Submenu exact-coverage mode={} comparisons:{} exactStates:{} evaluated={} avgExactUs={} maxExactUs={} prepareFrames={} avgPrepareUs={} maxPrepareUs={} exactShareOfPrepare={}% contradictionLogsSuppressed={} detailLogsSuppressed={} evidenceRecorded={} evidenceEmitted={} evidenceDropped={} diagnosticsFailed={}",
+			exactAuthoritative ? "authoritative" : "shadow", comparisons, states, exactFrames,
+			exactFrames == 0 ? 0 : exactNanos / (exactFrames * 1_000.0), exactMaxNanos / 1_000.0,
+			prototypeCalls,
+			prototypeCalls == 0 ? 0 : prototypeTotalNanos / (prototypeCalls * 1_000.0),
+			prototypeMaxNanos / 1_000.0,
+			prototypeTotalNanos == 0 ? 0 : Math.round(1000.0 * exactNanos / prototypeTotalNanos) / 10.0,
+			exactContradictionSuppressed, exactDetailSuppressed,
+			exactEvidenceRecorded, exactEvidenceEmitted, exactEvidenceDropped, exactDiagnosticsFailed);
+		Arrays.fill(exactComparisons, 0);
+		Arrays.fill(exactStates, 0);
+		exactNanos = exactMaxNanos = exactFrames = exactDetailLogs = exactDetailSuppressed = 0;
+		exactContradictionLogs = exactContradictionSuppressed = 0;
+	}
+
+	/**
+	 * Runs on every game tick, ahead of the 5s summary, so that prolonged scrolling cannot
+	 * overwrite frame records or evidence before they are logged. Failures disable streaming
+	 * only; rendering never depends on it.
+	 */
+	private void streamDiagnostics()
+	{
+		if (streamFailed)
+		{
+			return;
+		}
+		try
+		{
+			reportFrameTrace();
+			long dropped = exactEvidence.drain(record ->
+			{
+				exactEvidenceEmitted++;
+				log.info("Submenu exact evidence {}", record);
+			});
+			if (dropped > 0)
+			{
+				exactEvidenceDropped += dropped;
+				log.warn("Submenu exact evidence queue overflowed: {} records dropped since the previous tick (capacity {})",
+					dropped, exactEvidence.capacity());
+			}
+		}
+		catch (RuntimeException e)
+		{
+			streamFailed = true;
+			log.warn("Submenu diagnostic streaming failed and is disabled; rendering is unaffected", e);
+		}
+	}
+
+	private void shadowDecide(Menu root, SubmenuTree tree, ScrollableMenuViewport viewport,
+		boolean scrollable, int scroll, int canvasWidth, int canvasHeight, Point frameMouse)
+	{
+		if (!SUBMENU_SHADOW || shadowFailed)
+		{
+			return;
+		}
+		long start = System.nanoTime();
+		try
+		{
+			shadowDecision = shadow.decide(new SubmenuChainShadow.Frame(root, tree, viewport,
+				scrollable, scroll, canvasWidth, canvasHeight, client.getGameCycle(), frameMouse));
+			shadowDecisions[shadowDecision.kind.ordinal()]++;
+			if (shadowDecision.reason != null)
+			{
+				shadowProbeReasons[shadowDecision.reason.ordinal()]++;
+			}
+		}
+		catch (RuntimeException e)
+		{
+			disableShadow(e);
+		}
+		finally
+		{
+			shadowTime(start);
+		}
+	}
+
+	private void shadowProven(Menu root, SubmenuTree tree, ScrollableMenuViewport viewport,
+		boolean scrollable, int scroll, int canvasWidth, int canvasHeight, Point frameMouse,
+		int[] activeChain)
+	{
+		if (!SUBMENU_SHADOW || shadowFailed || shadowDecision == null)
+		{
+			return;
+		}
+		long start = System.nanoTime();
+		try
+		{
+			SubmenuChainShadow.Decision decision = shadowDecision;
+			Menu[] offered = decision.chain;
+			SubmenuChainShadow.Verdict verdict = shadow.observeProven(decision,
+				new SubmenuChainShadow.Frame(root, tree, viewport, scrollable, scroll,
+					canvasWidth, canvasHeight, client.getGameCycle(), frameMouse), activeChain);
+			shadowRecord(decision, verdict);
+			if (verdict == SubmenuChainShadow.Verdict.MISMATCH && shadowMismatchLogs++ < SHADOW_MISMATCH_LOG_LIMIT)
+			{
+				log.warn("Submenu shadow MISMATCH frame={} decision={} reused={} probed={} frameMouse={} scroll={}",
+					currentFrameTrace == null ? frameSequence : currentFrameTrace.id, decision,
+					SubmenuChainShadow.describe(offered), SubmenuChainShadow.describe(shadow.proofChain()),
+					frameMouse, scroll);
+			}
+		}
+		catch (RuntimeException e)
+		{
+			disableShadow(e);
+		}
+		finally
+		{
+			shadowDecision = null;
+			shadowTime(start);
+		}
+	}
+
+	private void shadowUnproven()
+	{
+		if (!SUBMENU_SHADOW || shadowFailed || shadowDecision == null)
+		{
+			return;
+		}
+		SubmenuChainShadow.Decision decision = shadowDecision;
+		shadowDecision = null;
+		shadowRecord(decision, shadow.observeUnproven(decision));
+	}
+
+	/** A failure while preparing proves nothing, and the old proof is not trusted past it. */
+	private void shadowAbort()
+	{
+		shadowUnproven();
+		shadow.invalidate();
+	}
+
+	private void shadowRecord(SubmenuChainShadow.Decision decision, SubmenuChainShadow.Verdict verdict)
+	{
+		shadowVerdicts[decision.kind.ordinal()][verdict.ordinal()]++;
+		if (decision.kind == SubmenuChainShadow.Kind.REUSE_SETTLED
+			&& verdict == SubmenuChainShadow.Verdict.MATCH && decision.age < shadowSettledMatchAges.length)
+		{
+			shadowSettledMatchAges[decision.age]++;
+		}
+		if (currentFrameTrace != null)
+		{
+			boolean settled = decision.kind == SubmenuChainShadow.Kind.REUSE_SETTLED;
+			currentFrameTrace.shadow = decision.kind == SubmenuChainShadow.Kind.PROBE ? '-'
+				: verdict == SubmenuChainShadow.Verdict.MATCH ? (settled ? 'S' : 's')
+				: verdict == SubmenuChainShadow.Verdict.MISMATCH ? (settled ? 'X' : 'x')
+				: settled ? 'U' : 'u';
+		}
+	}
+
+	private void shadowTime(long start)
+	{
+		long elapsed = System.nanoTime() - start;
+		shadowNanos += elapsed;
+		shadowMaxNanos = Math.max(shadowMaxNanos, elapsed);
+		shadowFrames++;
+	}
+
+	private void disableShadow(RuntimeException e)
+	{
+		shadowFailed = true;
+		shadowDecision = null;
+		shadow.invalidate();
+		log.warn("Submenu shadow validation failed and is disabled; rendering is unaffected", e);
+	}
+
+	private void reportShadow()
+	{
+		if (!SUBMENU_SHADOW)
+		{
+			return;
+		}
+		StringBuilder reasons = new StringBuilder();
+		for (SubmenuChainShadow.ProbeReason reason : SubmenuChainShadow.ProbeReason.values())
+		{
+			reasons.append(' ').append(reason).append('=').append(shadowProbeReasons[reason.ordinal()]);
+		}
+		int same = SubmenuChainShadow.Kind.REUSE_SAME_CYCLE.ordinal();
+		int settled = SubmenuChainShadow.Kind.REUSE_SETTLED.ordinal();
+		int match = SubmenuChainShadow.Verdict.MATCH.ordinal();
+		int mismatch = SubmenuChainShadow.Verdict.MISMATCH.ordinal();
+		int unverified = SubmenuChainShadow.Verdict.UNVERIFIED.ordinal();
+		log.info("Submenu shadow decisions probe={} reuseSameCycle={} reuseSettled={} sameCycleMatch={} sameCycleMismatch={} sameCycleUnverified={} settledMatch={} settledMismatch={} settledUnverified={} settledMatchByAge={} probeReasons:{} failed={} avgShadowUs={} maxShadowUs={}",
+			shadowDecisions[SubmenuChainShadow.Kind.PROBE.ordinal()], shadowDecisions[same], shadowDecisions[settled],
+			shadowVerdicts[same][match], shadowVerdicts[same][mismatch], shadowVerdicts[same][unverified],
+			shadowVerdicts[settled][match], shadowVerdicts[settled][mismatch], shadowVerdicts[settled][unverified],
+			Arrays.toString(shadowSettledMatchAges), reasons, shadowFailed,
+			shadowFrames == 0 ? 0 : shadowNanos / (shadowFrames * 1_000.0), shadowMaxNanos / 1_000.0);
+		Arrays.fill(shadowDecisions, 0);
+		Arrays.fill(shadowProbeReasons, 0);
+		for (long[] row : shadowVerdicts)
+		{
+			Arrays.fill(row, 0);
+		}
+		Arrays.fill(shadowSettledMatchAges, 0);
+		shadowNanos = shadowMaxNanos = shadowFrames = shadowMismatchLogs = 0;
 	}
 
 	private void renderPrototypeImage(SubmenuTree tree, int[] activeChain,
@@ -506,6 +1229,18 @@ class MenuOverlay extends Overlay
 		ScrollableMenuViewport rootViewport, int canvasHeight,
 		SubmenuPrototypeProbe.Result proof)
 	{
+		return validateScrolledChild(tree, chain, rootViewport, canvasHeight, proof, false);
+	}
+
+	/**
+	 * @param exactProof the chain came from the exact reading, so a detached child counts as
+	 * natively drawn only when that same reading resolved it: every marked pixel of its visible
+	 * rectangle changed. The checks themselves are identical in both modes.
+	 */
+	static ScrollChildValidation validateScrolledChild(SubmenuTree tree, int[] chain,
+		ScrollableMenuViewport rootViewport, int canvasHeight,
+		SubmenuPrototypeProbe.Result proof, boolean exactProof)
+	{
 		boolean detached = false;
 		for (int candidate : chain)
 		{
@@ -552,7 +1287,8 @@ class MenuOverlay extends Overlay
 						onProofChain |= proved == candidate;
 					}
 				}
-				boolean nativeDrawn = proof != null && onProofChain
+				boolean nativeDrawn = exactProof ? exactlyDrawn(proof, candidate)
+					: proof != null && onProofChain
 					&& proof.state == SubmenuPrototypeProbe.State.ACTIVE
 					&& proof.restored && candidate < proof.changed.length
 					&& (proof.changed[candidate] > 0
@@ -563,12 +1299,31 @@ class MenuOverlay extends Overlay
 						+ " row=" + row + " rowTop=" + rowTop + " child=" + child.bounds
 						+ " exclusive=" + (proof == null || candidate >= proof.changed.length
 							? 0 : proof.changed[candidate])
-						+ " footprintMatches=" + (proof == null ? 0 : proof.footprintMatches));
+						+ " footprintMatches=" + (proof == null ? 0 : proof.footprintMatches)
+						+ (exactProof ? " exact=" + (proof == null ? "none" : proof.exact.state) : ""));
 				}
 				detached = true;
 			}
 		}
 		return detached ? ScrollChildValidation.DETACHED : ScrollChildValidation.ATTACHED;
+	}
+
+	/** The probe's own exact reading resolved a chain containing this candidate. */
+	private static boolean exactlyDrawn(SubmenuPrototypeProbe.Result proof, int candidate)
+	{
+		if (proof == null || !proof.restored || !proof.framebufferVerified
+			|| proof.exact.state != ExactCoverageResolver.State.RESOLVED)
+		{
+			return false;
+		}
+		for (int proved : proof.exact.chain)
+		{
+			if (proved == candidate)
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 
 	static final class ScrollChildValidation
@@ -627,20 +1382,23 @@ class MenuOverlay extends Overlay
 
 	synchronized void clearPrepared()
 	{
+		if (prepared && preparedFrameTrace != null && !preparedFrameTrace.finalized)
+		{
+			preparedFrameTrace.finalized = true;
+			preparedFrameTrace.finalReason = "cleared before blit";
+		}
 		prepared = false;
 		preparedRoot = null;
 		preparedState = null;
-		preparedTree = null;
-		preparedChain = null;
-		preparedViewport = null;
-		preparedRegion = null;
-		preparedTheme = null;
 		preparedScrollable = false;
 		preparedScroll = 0;
+		preparedAtNanos = 0;
+		preparedFrameTrace = null;
 	}
 
 	synchronized void reportPrototype()
 	{
+		streamDiagnostics();
 		long now = System.nanoTime();
 		if (now - prototypeLastReport < 5_000_000_000L || prototypeCalls == 0)
 		{
@@ -655,27 +1413,130 @@ class MenuOverlay extends Overlay
 			}
 			reasons.append(outcome).append('=').append(prototypeOutcomes[outcome.ordinal()]);
 		}
-		log.info("Submenu prototype summary calls={} ready={} fallback={} {} blits={} blitFailures={} closedDrops={} changedRootDrops={} replacedBeforeBlit={} reentrantEvents={} avgTotalMs={} avgProbeMs={} avgNativeDrawMs={} avgThemeMs={} maxTotalMs={}",
+		log.info("Submenu prototype summary calls={} ready={} fallback={} {} consumed={} blits={} blitFailures={} closedDrops={} changedRootDrops={} replacedBeforeBlit={} reentrantEvents={} probeSamples={} avgVisibleCandidates={} maxVisibleCandidates={} avgCandidatePixels={} avgReadyToFinalMs={} maxReadyToFinalMs={} avgFinalMs={} maxFinalMs={} avgTotalMs={} avgProbeMs={} avgNativeDrawMs={} avgThemeMs={} maxTotalMs={}",
 			prototypeCalls, prototypeReady, prototypeCalls - prototypeReady,
-			reasons, prototypeBlits, prototypeBlitFailures, prototypeClosedDrops, prototypeChangedDrops,
+			reasons, prototypeConsumed, prototypeBlits, prototypeBlitFailures, prototypeClosedDrops, prototypeChangedDrops,
 			prototypeReplacedBeforeBlit, prototypeReentrantEvents,
+			prototypeProbeSamples,
+			prototypeCandidateObservations == 0 ? 0 : (double) prototypeVisibleCandidates / prototypeCandidateObservations,
+			prototypeMaxVisibleCandidates,
+			prototypeCandidateObservations == 0 ? 0 : (double) prototypeCandidatePixels / prototypeCandidateObservations,
+			prototypeFinalFrames == 0 ? 0 : prototypeReadyToFinalNanos / (prototypeFinalFrames * 1_000_000.0),
+			prototypeMaxReadyToFinalNanos / 1_000_000.0,
+			prototypeFinalFrames == 0 ? 0 : prototypeFinalNanos / (prototypeFinalFrames * 1_000_000.0),
+			prototypeMaxFinalNanos / 1_000_000.0,
 			prototypeTotalNanos / (prototypeCalls * 1_000_000.0),
 			prototypeProbeNanos / (prototypeCalls * 1_000_000.0),
 			prototypeDrawNanos / (prototypeCalls * 1_000_000.0),
 			prototypeRenderNanos / (prototypeCalls * 1_000_000.0),
 			prototypeMaxNanos / 1_000_000.0);
+		reportShadow();
+		if (!exactDiagnosticsFailed)
+		{
+			try
+			{
+				reportExact();
+			}
+			catch (RuntimeException e)
+			{
+				// Runs on the game tick ahead of the plugin's own tick work; never let it escape.
+				disableExactDiagnostics(e);
+			}
+		}
 		prototypeCalls = prototypeReady = prototypeProbeNanos = prototypeDrawNanos = 0;
 		prototypeRenderNanos = prototypeTotalNanos = prototypeMaxNanos = 0;
 		prototypeBlits = prototypeBlitFailures = prototypeClosedDrops = prototypeChangedDrops = 0;
 		prototypeReplacedBeforeBlit = prototypeReentrantEvents = 0;
+		prototypeConsumed = prototypeFinalNanos = prototypeMaxFinalNanos = prototypeFinalFrames = 0;
+		prototypeReadyToFinalNanos = prototypeMaxReadyToFinalNanos = 0;
+		prototypeProbeSamples = prototypeCandidateObservations = prototypeVisibleCandidates = 0;
+		prototypeCandidatePixels = 0;
+		prototypeMaxVisibleCandidates = 0;
 		Arrays.fill(prototypeOutcomes, 0);
 		prototypeLastReport = now;
+	}
+
+	private void reportFrameTrace()
+	{
+		if (!SUBMENU_TRACE || frameSequence == lastReportedFrame)
+		{
+			return;
+		}
+		long first = Math.max(lastReportedFrame + 1, frameSequence - FRAME_TRACE_CAPACITY + 1);
+		long lost = first - lastReportedFrame - 1;
+		long lastEmitted = lastReportedFrame;
+		long baseMs = 0;
+		StringBuilder chunk = new StringBuilder(4096);
+		for (long id = first; id <= frameSequence; id++)
+		{
+			FrameTrace frame = frameTraces[(int) (id % FRAME_TRACE_CAPACITY)];
+			if (frame == null || frame.id != id)
+			{
+				continue;
+			}
+			if (!frame.finalized)
+			{
+				break;
+			}
+			if (baseMs == 0)
+			{
+				baseMs = frame.timeMs;
+			}
+			if (chunk.length() > 3500)
+			{
+				log.info("Submenu frames baseMs={} lost={} format=id@offsetMs:outcome/consumed/final:child,scroll,candidates,visible:prepUs,probeUs,waitUs,finalUs:draws:shadow:exact:exactUs {}",
+					baseMs, lost, chunk.toString());
+				chunk.setLength(0);
+				lost = 0;
+			}
+			char outcome = frame.outcome == PrototypeOutcome.READY_WITH_CHILD ? 'H'
+				: frame.outcome == PrototypeOutcome.READY_ROOT_ONLY ? 'R'
+				: frame.outcome == PrototypeOutcome.READY_WITH_NATIVE_DETACHED_CHILD ? 'T'
+				: frame.outcome == null ? '?' : 'F';
+			char finalState = frame.blitted ? 'B' : !frame.finalized ? 'P'
+				: outcome == 'F' ? 'N' : 'D';
+			chunk.append(id).append('@').append(frame.timeMs - baseMs)
+				.append(':').append(outcome).append(frame.consumed ? 'C' : '-').append(finalState)
+				.append(':').append(frame.selected).append(',').append(frame.scroll)
+				.append(',').append(frame.candidates).append(',').append(frame.visibleCandidates)
+				.append(':').append(frame.preparationNanos / 1_000)
+				.append(',').append(frame.probeNanos / 1_000)
+				.append(',').append(frame.readyToFinalNanos / 1_000)
+				.append(',').append(frame.finalNanos / 1_000)
+				.append(':').append(frame.nativeDraws).append(':').append(frame.shadow).append(':').append(frame.exact)
+				.append(':').append(frame.exactNanos / 1_000).append(' ');
+			lastEmitted = id;
+			if (frame.finalReason != null)
+			{
+			log.info("Submenu frame final drop id={} reason={}", id, frame.finalReason);
+			}
+		}
+		if (chunk.length() > 0)
+		{
+			log.info("Submenu frames baseMs={} lost={} format=id@offsetMs:outcome/consumed/final:child,scroll,candidates,visible:prepUs,probeUs,waitUs,finalUs:draws:shadow:exact:exactUs {}",
+				baseMs, lost, chunk.toString());
+		}
+		lastReportedFrame = lastEmitted;
 	}
 
 	private void prototypeTransition(String state, SubmenuPrototypeProbe.Result result,
 		SubmenuTree tree, long probeCallNanos)
 	{
-		int signature = 31 * state.hashCode() + (result == null ? 0 : Arrays.hashCode(result.activeChain));
+		prototypeTransition(state, result, tree, probeCallNanos,
+			result == null ? new int[0] : result.activeChain);
+	}
+
+	/** @param chain the rendered chain for READY states, otherwise the previous resolver's */
+	private void prototypeTransition(String state, SubmenuPrototypeProbe.Result result,
+		SubmenuTree tree, long probeCallNanos, int[] chain)
+	{
+		// The periodic frame trace records every READY frame, including its final blit.
+		// Avoid formatting large candidate arrays on the client render path.
+		if (SUBMENU_TRACE && state.startsWith("READY"))
+		{
+			return;
+		}
+		int signature = 31 * state.hashCode() + Arrays.hashCode(chain);
 		int rootTextHash = 0;
 		if (SUBMENU_TRACE && tree != null)
 		{
@@ -711,7 +1572,7 @@ class MenuOverlay extends Overlay
 		List<String> activeParents = new ArrayList<>();
 		if (tree != null && result != null)
 		{
-			for (int candidate : result.activeChain)
+			for (int candidate : chain)
 			{
 				SubmenuTree.Node child = tree.nodes.get(candidate + 1);
 				SubmenuTree.Node parent = tree.nodes.get(child.parentNode);
@@ -722,17 +1583,22 @@ class MenuOverlay extends Overlay
 							? client.getMenuScroll() : 0)) * MenuRenderer.ROW_HEIGHT));
 			}
 		}
-		log.info("Submenu prototype state={} rootId={} rootTextHash={} root={} scrollable={} scroll={} canvas={}x{} mouse={} candidates={} bounds={} parents={} chain={} activeParents={} witnesses={} changed={} sharedWitnesses={} sharedChanged={} footprint={} footprintPixels={} footprintMatches={} restored={} probeCallMs={} nativeDrawMs={} nativeDrawPasses={} copiedPixels={} allocatedBytesMin={}",
+		log.info("Submenu prototype state={} frame={} prepSoFarMs={} rootId={} rootTextHash={} root={} scrollable={} scroll={} canvas={}x{} frameMouse={} candidates={} visibleCandidates={} candidatePixels={} bounds={} parents={} chain={} activeParents={} witnesses={} changed={} sharedWitnesses={} sharedChanged={} footprint={} footprintPixels={} footprintMatches={} restored={} probeCallMs={} nativeDrawMs={} nativeDrawPasses={} copiedPixels={} allocatedBytesMin={} authoritative={} exact={}",
 			state,
+			currentFrameTrace == null ? frameSequence : currentFrameTrace.id,
+			currentFrameTrace == null ? 0
+				: (System.nanoTime() - currentFrameTrace.startNanos) / 1_000_000.0,
 			tree == null ? 0 : System.identityHashCode(tree.root),
 			rootTextHash,
 			tree == null ? "unknown" : tree.nodes.get(0).bounds,
 			client.isMenuScrollable(), client.getMenuScroll(),
-			client.getCanvasWidth(), client.getCanvasHeight(), client.getMouseCanvasPosition(),
+			client.getCanvasWidth(), client.getCanvasHeight(), currentFrameMouse,
 			tree == null ? 0 : tree.candidateBounds.size(),
+			result == null ? 0 : result.visibleCandidates,
+			result == null ? 0 : result.candidatePixels,
 			tree == null ? "[]" : tree.candidateBounds,
 			tree == null ? "[]" : tree.candidateParents,
-			result == null ? "[]" : Arrays.toString(result.activeChain),
+			Arrays.toString(chain),
 			activeParents,
 			result == null ? "[]" : Arrays.toString(result.witnesses),
 			result == null ? "[]" : Arrays.toString(result.changed),
@@ -746,7 +1612,9 @@ class MenuOverlay extends Overlay
 			result == null ? 0 : result.drawNanos / 1_000_000.0,
 			result == null ? 0 : result.drawPasses,
 			result == null ? 0 : result.copiedPixels,
-			result == null ? 0 : result.allocatedBytesMin);
+			result == null ? 0 : result.allocatedBytesMin,
+			exactAuthoritative,
+			result == null ? "none" : result.exact);
 	}
 
 	private RowBuffer prototypeRowBuffer(int depth)
@@ -823,6 +1691,16 @@ class MenuOverlay extends Overlay
 	{
 		if (prepared)
 		{
+			long finalStart = System.nanoTime();
+			long readyToFinal = preparedAtNanos == 0 ? 0
+				: Math.max(0, finalStart - preparedAtNanos);
+			prototypeReadyToFinalNanos += readyToFinal;
+			prototypeMaxReadyToFinalNanos = Math.max(prototypeMaxReadyToFinalNanos, readyToFinal);
+			FrameTrace frameTrace = preparedFrameTrace;
+			if (frameTrace != null)
+			{
+				frameTrace.readyToFinalNanos = readyToFinal;
+			}
 			try
 			{
 				boolean open = client.isMenuOpen();
@@ -830,33 +1708,44 @@ class MenuOverlay extends Overlay
 				if (!open)
 				{
 					prototypeClosedDrops++;
+					noteFinalReason(frameTrace, "closed");
 				}
 				else if (!preparedFrameMatches(true, currentRoot, preparedRoot))
 				{
 					prototypeChangedDrops++;
+					noteFinalReason(frameTrace, "root changed");
 				}
 				else if (client.isMenuScrollable() != preparedScrollable
 					|| (preparedScrollable && client.getMenuScroll() != preparedScroll))
 				{
 					prototypeChangedDrops++;
+					noteFinalReason(frameTrace, "scroll changed");
 				}
 				else
 				{
+					// The event is already consumed, so a drop here leaves this frame without a
+					// menu. Only structural changes may cause it; the pointer is never read here.
 					String mismatch = !HARDENED_LIFECYCLE ? null
 						: preparedState == null ? "missing prepared state"
-						: refreshPreparedMouse(currentRoot, client.getMouseCanvasPosition());
+						: preparedState.mismatchReason(currentRoot);
 					if (mismatch != null)
 					{
 						prototypeChangedDrops++;
+						noteFinalReason(frameTrace, mismatch);
 					}
 					else if (graphics.drawImage(prototypeImage, preparedX, preparedY, null))
 					{
 						prototypeBlits++;
+						if (frameTrace != null)
+						{
+							frameTrace.blitted = true;
+						}
 					}
 					else
 					{
 						prototypeBlitFailures++;
 						prototypeBlitFailed = true;
+						noteFinalReason(frameTrace, "drawImage returned false");
 					}
 				}
 			}
@@ -864,10 +1753,20 @@ class MenuOverlay extends Overlay
 			{
 				prototypeBlitFailures++;
 				prototypeBlitFailed = true;
-				log.warn("Submenu prototype final image draw failed; native menus will be used", e);
+				noteFinalReason(frameTrace, e.getClass().getSimpleName());
+				log.warn("Submenu prototype final image draw failed; native menus resume on subsequent frames", e);
 			}
 			finally
 			{
+				long finalNanos = System.nanoTime() - finalStart;
+				prototypeFinalFrames++;
+				prototypeFinalNanos += finalNanos;
+				prototypeMaxFinalNanos = Math.max(prototypeMaxFinalNanos, finalNanos);
+				if (frameTrace != null)
+				{
+					frameTrace.finalNanos = finalNanos;
+					frameTrace.finalized = true;
+				}
 				clearPrepared();
 			}
 			return null;
@@ -887,30 +1786,6 @@ class MenuOverlay extends Overlay
 			log.warn("Right Click Styler failed to draw the menu; using the vanilla menu for the rest of this session", e);
 		}
 		return null;
-	}
-
-	private String refreshPreparedMouse(Menu currentRoot, Point mouse)
-	{
-		String mismatch = preparedState.mismatchReason(currentRoot, mouse);
-		for (int attempt = 0; mismatch != null && mismatch.startsWith("mouse hover ")
-			&& attempt < 2 && preparedState.canRetarget(mouse); attempt++)
-		{
-			renderPrototypeImage(preparedTree, preparedChain, preparedViewport,
-				preparedRegion, mouse, preparedScroll, preparedTheme, preparedLocalLevel);
-			preparedState.setRenderedMouse(mouse);
-			if (!client.isMenuOpen() || client.getMenu() != preparedRoot)
-			{
-				return "root identity or menu close during hover redraw";
-			}
-			if (client.isMenuScrollable() != preparedScrollable
-				|| (preparedScrollable && client.getMenuScroll() != preparedScroll))
-			{
-				return "scroll changed during hover redraw";
-			}
-			mouse = client.getMouseCanvasPosition();
-			mismatch = preparedState.mismatchReason(client.getMenu(), mouse);
-		}
-		return mismatch;
 	}
 
 	private void renderMenu(Graphics2D graphics, Menu menu, MenuEntry[] entries)

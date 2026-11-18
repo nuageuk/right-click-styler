@@ -9,6 +9,7 @@ import net.runelite.api.GameState;
 import net.runelite.api.Menu;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.Player;
+import net.runelite.api.Point;
 import net.runelite.api.events.BeforeMenuRender;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
@@ -124,41 +125,9 @@ public class RightClickStylerPlugin extends Plugin
 	@Subscribe
 	public void onBeforeMenuRender(BeforeMenuRender event)
 	{
-		if (SUBMENU_PROTOTYPE)
+		if (SUBMENU_PROTOTYPE && handleSubmenuPrototype(event))
 		{
-			if (preparingPrototype)
-			{
-				menuOverlay.recordReentrantEvent();
-				return;
-			}
-			menuOverlay.discardPreparedAtEventStart();
-			if (client.isMenuOpen())
-			{
-				Menu root = client.getMenu();
-				MenuEntry[] entries = root == null ? null : root.getMenuEntries();
-				if (entries != null
-					&& (MenuOverlay.containsSubMenu(entries) || client.isMenuScrollable()))
-				{
-					if (event.isConsumed())
-					{
-						menuOverlay.recordAlreadyConsumedSubmenu();
-						return;
-					}
-					preparingPrototype = true;
-					try
-					{
-						if (menuOverlay.prepareSubmenuFrame(root, entries))
-						{
-							event.consume();
-						}
-					}
-					finally
-					{
-						preparingPrototype = false;
-					}
-					return;
-				}
-			}
+			return;
 		}
 		if (menuOverlay.shouldDraw())
 		{
@@ -166,13 +135,61 @@ public class RightClickStylerPlugin extends Plugin
 		}
 	}
 
+	/** @return true when the opt-in submenu prototype owns this event. */
+	boolean handleSubmenuPrototype(BeforeMenuRender event)
+	{
+		if (preparingPrototype)
+		{
+			menuOverlay.recordReentrantEvent();
+			return true;
+		}
+		// The only mouse read for this frame. getMouseCanvasPosition follows the AWT thread
+		// live, while native submenu state is fixed for the cycle, so preparation and the
+		// final draw both use this sample instead of re-reading the pointer.
+		Point frameMouse = client.getMouseCanvasPosition();
+		menuOverlay.discardPreparedAtEventStart();
+		if (!client.isMenuOpen())
+		{
+			menuOverlay.invalidateSubmenuShadow();
+			return false;
+		}
+		Menu root = client.getMenu();
+		MenuEntry[] entries = root == null ? null : root.getMenuEntries();
+		if (entries == null
+			|| !(MenuOverlay.containsSubMenu(entries) || client.isMenuScrollable()))
+		{
+			menuOverlay.invalidateSubmenuShadow();
+			return false;
+		}
+		if (event.isConsumed())
+		{
+			menuOverlay.invalidateSubmenuShadow();
+			menuOverlay.recordAlreadyConsumedSubmenu();
+			return true;
+		}
+		preparingPrototype = true;
+		try
+		{
+			if (menuOverlay.prepareSubmenuFrame(root, entries, frameMouse))
+			{
+				// A late structural change or overlay draw failure can leave this
+				// consumed frame blank. Only a later menu event can choose
+				// native fallback; this frame cannot be restored.
+				event.consume();
+				menuOverlay.recordSubmenuConsumed();
+			}
+		}
+		finally
+		{
+			preparingPrototype = false;
+		}
+		return true;
+	}
+
 	@Subscribe
 	public void onMenuOpened(MenuOpened event)
 	{
-		if (MenuOverlay.hardenedLifecycle())
-		{
-			menuOverlay.clearPrepared();
-		}
+		menuOverlay.menuOpened();
 	}
 
 	// Polled each tick so level-ups reach the preview; this also covers login, where the local player
