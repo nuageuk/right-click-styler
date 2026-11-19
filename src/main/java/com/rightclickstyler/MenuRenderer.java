@@ -874,7 +874,7 @@ final class MenuRenderer
 			this.submenuOpensLeft = opensLeft;
 		}
 
-		// Read by the prototype image cache, whose key is exactly what a row draws.
+		// Read by the submenu image cache, whose key is exactly what a row draws.
 		String option()
 		{
 			return option;

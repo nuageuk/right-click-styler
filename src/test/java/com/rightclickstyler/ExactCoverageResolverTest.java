@@ -8,14 +8,12 @@ import java.util.List;
 import net.runelite.api.Menu;
 import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
-import org.junit.Before;
 import org.junit.Test;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assume.assumeTrue;
 
 /**
  * Deterministic fixtures with a known native active chain. Each paints the root and that chain
@@ -28,20 +26,14 @@ public class ExactCoverageResolverTest
 	static final int HEIGHT = 592;
 	private static final int NATIVE_COLOR = 0xFF5D5447;
 
-	@Before
-	public void requireExactShadow()
-	{
-		assumeTrue("exact-coverage shadow disabled", SubmenuPrototypeProbe.exactCoverageShadowEnabled());
-	}
-
 	@Test
 	public void loggedNearTieSiblingsResolveToTheDrawnWidth()
 	{
 		// Frame 587 of submenu-step1-analysis.log: three retained siblings at one position
 		// whose widths differ by 1-13px. The probe's 3px footprint tolerance matches three.
 		Fixture f = loggedFrame587();
-		SubmenuPrototypeProbe.Result result = f.probe(Paint.OPAQUE, f.child(2));
-		assertEquals(SubmenuPrototypeProbe.State.AMBIGUOUS, result.state);
+		NativeSubmenuProbe.Result result = f.probe(Paint.OPAQUE, f.child(2));
+		assertEquals(NativeSubmenuProbe.State.AMBIGUOUS, result.state);
 		assertResolved(result, 2);
 	}
 
@@ -59,8 +51,8 @@ public class ExactCoverageResolverTest
 	public void retainedRectanglesWithoutAnOpenChildResolveToRootOnly()
 	{
 		Fixture f = loggedFrame587();
-		SubmenuPrototypeProbe.Result result = f.probe(Paint.OPAQUE);
-		assertEquals(SubmenuPrototypeProbe.State.NO_CHILD, result.state);
+		NativeSubmenuProbe.Result result = f.probe(Paint.OPAQUE);
+		assertEquals(NativeSubmenuProbe.State.NO_CHILD, result.state);
 		assertResolved(result);
 	}
 
@@ -70,8 +62,8 @@ public class ExactCoverageResolverTest
 		Fixture f = new Fixture(100, 4);
 		f.child(0).setBounds(328, 300, 220, 97);
 		f.child(1).setBounds(328, 300, 220, 97);
-		SubmenuPrototypeProbe.Result result = f.probe(Paint.OPAQUE, f.child(1));
-		assertEquals(SubmenuPrototypeProbe.State.AMBIGUOUS, result.state);
+		NativeSubmenuProbe.Result result = f.probe(Paint.OPAQUE, f.child(1));
+		assertEquals(NativeSubmenuProbe.State.AMBIGUOUS, result.state);
 		assertEquals(ExactCoverageResolver.State.AMBIGUOUS, result.exact.state);
 		assertEquals(2, result.exact.explainingChains);
 	}
@@ -105,7 +97,7 @@ public class ExactCoverageResolverTest
 		f.parent.setBounds(328, 200, 220, 97);
 		f.drawnGrandchild.setBounds(548, 215, 180, 97);
 		f.staleGrandchild.setBounds(548, 215, 176, 97);
-		SubmenuPrototypeProbe.Result result = f.probe(Paint.OPAQUE, f.parent, f.drawnGrandchild);
+		NativeSubmenuProbe.Result result = f.probe(Paint.OPAQUE, f.parent, f.drawnGrandchild);
 		assertResolved(result, f.index(f.parent), f.index(f.drawnGrandchild));
 		assertResolved(f.probe(Paint.OPAQUE, f.parent, f.staleGrandchild), f.index(f.parent), f.index(f.staleGrandchild));
 		assertResolved(f.probe(Paint.OPAQUE, f.parent), f.index(f.parent));
@@ -136,7 +128,7 @@ public class ExactCoverageResolverTest
 	public void unpaintedPixelsInsideTheDrawnChildAreNeverGuessed()
 	{
 		Fixture f = loggedFrame587();
-		SubmenuPrototypeProbe.Result result = f.probe(Paint.WITH_HOLE, f.child(2));
+		NativeSubmenuProbe.Result result = f.probe(Paint.WITH_HOLE, f.child(2));
 		assertEquals("evidence against full coverage", ExactCoverageResolver.State.UNEXPLAINED, result.exact.state);
 	}
 
@@ -144,7 +136,7 @@ public class ExactCoverageResolverTest
 	public void drawingOutsideTheChainIsNeverGuessed()
 	{
 		Fixture f = loggedFrame587();
-		SubmenuPrototypeProbe.Result result = f.probe(Paint.WITH_HALO, f.child(2));
+		NativeSubmenuProbe.Result result = f.probe(Paint.WITH_HALO, f.child(2));
 		assertNotEquals(ExactCoverageResolver.State.RESOLVED, result.exact.state);
 	}
 
@@ -153,7 +145,7 @@ public class ExactCoverageResolverTest
 	{
 		Fixture f = new Fixture(100, 20);
 		f.child(0).setBounds(120, 100, 150, 97); // entirely under the root
-		SubmenuPrototypeProbe.Result result = f.probe(Paint.OPAQUE);
+		NativeSubmenuProbe.Result result = f.probe(Paint.OPAQUE);
 		assertEquals(ExactCoverageResolver.State.UNEVIDENCED, result.exact.state);
 	}
 
@@ -179,8 +171,8 @@ public class ExactCoverageResolverTest
 		Fixture f = new Fixture(100, 4);
 		f.child(0).setBounds(328, 100, 220, 97);
 		f.child(1).setBounds(328, 300, 220, 97);
-		SubmenuPrototypeProbe.Result result = f.probe(Paint.OPAQUE, f.child(1));
-		assertEquals(SubmenuPrototypeProbe.State.ACTIVE, result.state);
+		NativeSubmenuProbe.Result result = f.probe(Paint.OPAQUE, f.child(1));
+		assertEquals(NativeSubmenuProbe.State.ACTIVE, result.state);
 		assertArrayEquals(new int[]{1}, result.activeChain);
 		assertResolved(result, 1);
 	}
@@ -195,13 +187,13 @@ public class ExactCoverageResolverTest
 			pixels[i] = i * 31;
 		}
 		int[] original = pixels.clone();
-		SubmenuPrototypeProbe.Result result = SubmenuPrototypeProbe.probePixels(pixels, WIDTH, HEIGHT,
+		NativeSubmenuProbe.Result result = NativeSubmenuProbe.probePixels(pixels, WIDTH, HEIGHT,
 			SubmenuTree.capture(f.root), () -> Paint.OPAQUE.paint(pixels, f.root, f.child(2)));
 		assertResolved(result, 2);
 		assertArrayEquals("probe and resolver leave the framebuffer as it was", original, pixels);
 	}
 
-	static void assertResolved(SubmenuPrototypeProbe.Result result, int... chain)
+	static void assertResolved(NativeSubmenuProbe.Result result, int... chain)
 	{
 		assertEquals(result.exact.toString(), ExactCoverageResolver.State.RESOLVED, result.exact.state);
 		assertArrayEquals(result.exact.toString(), chain, result.exact.chain);
@@ -335,11 +327,11 @@ public class ExactCoverageResolverTest
 			throw new AssertionError("not a candidate");
 		}
 
-		SubmenuPrototypeProbe.Result probe(Paint paint, Menu... chain)
+		NativeSubmenuProbe.Result probe(Paint paint, Menu... chain)
 		{
 			int[] pixels = new int[WIDTH * HEIGHT];
 			SubmenuTree tree = SubmenuTree.capture(root, null, skippedRows);
-			SubmenuPrototypeProbe.Result result = SubmenuPrototypeProbe.probePixels(pixels, WIDTH, HEIGHT,
+			NativeSubmenuProbe.Result result = NativeSubmenuProbe.probePixels(pixels, WIDTH, HEIGHT,
 				tree, () -> paint.paint(pixels, root, chain));
 			assertTrue("framebuffer restored", Arrays.equals(new int[pixels.length], pixels));
 			return result;

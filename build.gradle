@@ -35,65 +35,18 @@ tasks.withType(JavaCompile).configureEach {
 	options.release.set(11)
 }
 
-// Temporary local validation only: experiment sources are excluded from the production jar.
-sourceSets.test.java.srcDir 'experiments'
-
+// -PwriteProbeGolden=<path> regenerates the probe semantics golden file instead of checking it.
 tasks.withType(Test).configureEach {
-	systemProperty 'rightclickstyler.submenuLifecycle',
-		project.findProperty('testSubmenuLifecycle') ?: 'hardened'
-	systemProperty 'rightclickstyler.submenuTrace',
-		project.findProperty('submenuTrace') ?: 'false'
-	// Default for overlays the tests do not configure; tests of either mode set it explicitly.
-	systemProperty 'rightclickstyler.exactCoverageAuthoritative',
-		project.findProperty('testExactAuthoritative') ?: 'true'
-	systemProperty 'rightclickstyler.submenuShadow',
-		project.findProperty('testSubmenuShadow') ?: 'true'
-	systemProperty 'rightclickstyler.exactEvidence',
-		project.findProperty('testExactEvidence') ?: 'true'
-	// Timing-only tests are skipped unless -Pbenchmark=true; -PwriteProbeGolden=<path> regenerates
-	// the probe semantics golden file instead of checking against it.
-	systemProperty 'rightclickstyler.benchmark', project.findProperty('benchmark') ?: 'false'
 	systemProperty 'rightclickstyler.writeProbeGolden', project.findProperty('writeProbeGolden') ?: ''
-	// Probe optimisation level for tests that do not set one (0 = original implementation).
-	systemProperty 'rightclickstyler.probeOpt', project.findProperty('testProbeOpt') ?: '4'
-	outputs.upToDateWhen { !project.hasProperty('benchmark') && !project.hasProperty('writeProbeGolden') }
+	outputs.upToDateWhen { !project.hasProperty('writeProbeGolden') }
 }
 
 tasks.register('run', JavaExec) {
 	classpath = sourceSets.test.runtimeClasspath
 	mainClass = pluginMainClass
 
-	jvmArgs "-ea", "-Drightclickstyler.submenuPrototype=${project.findProperty('submenuPrototype') ?: 'true'}",
-		"-Drightclickstyler.submenuTrace=${project.findProperty('submenuTrace') ?: 'false'}",
-		"-Drightclickstyler.submenuLifecycle=${project.findProperty('submenuLifecycle') ?: 'hardened'}",
-		"-Drightclickstyler.exactCoverageAuthoritative=${project.findProperty('exactAuthoritative') ?: 'true'}",
-		"-Drightclickstyler.imageCache=${project.findProperty('imageCache') ?: 'true'}",
-		"-Drightclickstyler.imageCacheVerify=${project.findProperty('imageCacheVerify') ?: '0'}",
-		"-Drightclickstyler.perfTrace=${project.findProperty('perfTrace') ?: 'false'}",
-		"-Drightclickstyler.probeOpt=${project.findProperty('probeOpt') ?: '4'}"
+	jvmArgs "-ea"
 	args "--developer-mode", "--debug"
-}
-
-tasks.register('runDiagnostic', JavaExec) {
-	classpath = sourceSets.test.runtimeClasspath
-	mainClass = 'com.rightclickstyler.SubmenuDiagnosticLauncher'
-	jvmArgs '-ea', "-Drightclickstyler.submenuProbe=${project.findProperty('submenuProbe') ?: 'true'}"
-	args '--developer-mode', '--debug'
-}
-
-tasks.register('runSubmenuHarness', JavaExec) {
-	classpath = sourceSets.test.runtimeClasspath
-	mainClass = 'experiments.SubmenuRasterProbeHarness'
-	jvmArgs '-ea'
-}
-
-tasks.register('benchmarkSubmenuPrototype', JavaExec) {
-	classpath = sourceSets.test.runtimeClasspath
-	mainClass = 'com.rightclickstyler.MenuOverlayTest'
-	jvmArgs '-ea'
-	if (project.hasProperty('benchmarkMode')) {
-		args project.property('benchmarkMode').toString()
-	}
 }
 
 tasks.register('shadowJar', Jar) {
@@ -116,8 +69,6 @@ tasks.register('shadowJar', Jar) {
 	exclude 'META-INF/*.DSA'
 	exclude 'META-INF/*.RSA'
 	exclude '**/module-info.class'
-	exclude 'experiments/**'
-	exclude 'com/rightclickstyler/SubmenuDiagnostic*'
 
 	group = BasePlugin.BUILD_GROUP
 	archiveClassifier.set('shadow')

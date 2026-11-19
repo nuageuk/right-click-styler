@@ -27,7 +27,7 @@ final class ProbeStressCorpus
 
 	interface Case
 	{
-		String fingerprint(SubmenuPrototypeProbe probe);
+		String fingerprint(NativeSubmenuProbe probe);
 	}
 
 	private static final class Spec
@@ -144,7 +144,7 @@ final class ProbeStressCorpus
 		}
 
 		@Override
-		public String fingerprint(SubmenuPrototypeProbe probe)
+		public String fingerprint(NativeSubmenuProbe probe)
 		{
 			Built built = new Built(spec);
 			int[] pixels = ProbeSemanticsGoldenTest.noise(new Random(spec.name.hashCode() * 31L + draw.name.hashCode()),
@@ -181,7 +181,7 @@ final class ProbeStressCorpus
 			};
 			try
 			{
-				SubmenuPrototypeProbe.Result result = probe.samplePixels(pixels, spec.width, spec.height, built.tree, nativeDraw);
+				NativeSubmenuProbe.Result result = probe.samplePixels(pixels, spec.width, spec.height, built.tree, nativeDraw);
 				return ProbeSemanticsGoldenTest.fingerprint(id, result, Arrays.equals(before, pixels));
 			}
 			catch (RuntimeException e)
@@ -192,7 +192,7 @@ final class ProbeStressCorpus
 				int[] frame = ProbeSemanticsGoldenTest.noise(new Random(7), spec.width * spec.height);
 				int[] frameBefore = frame.clone();
 				List<Rectangle> rootOnly = Collections.singletonList(ExactCoverageResolverTest.bounds(next.root));
-				SubmenuPrototypeProbe.Result after = probe.samplePixels(frame, spec.width, spec.height, next.tree,
+				NativeSubmenuProbe.Result after = probe.samplePixels(frame, spec.width, spec.height, next.tree,
 					() -> ProbeSemanticsGoldenTest.paint(frame, spec.width, spec.height, rootOnly));
 				return id + "|threw=" + e.getClass().getSimpleName() + ":" + e.getMessage() + "|bufferIntact=" + intact
 					+ "|then " + ProbeSemanticsGoldenTest.fingerprint("followUp", after, Arrays.equals(frameBefore, frame));

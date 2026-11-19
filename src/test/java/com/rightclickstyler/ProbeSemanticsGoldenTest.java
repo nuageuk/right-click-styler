@@ -35,9 +35,9 @@ import static org.junit.Assume.assumeTrue;
  * state carried between frames (buffers, masks, coverage) is exercised, and each one is also
  * run on a fresh instance; both must agree. The framebuffer must be restored bit for bit.
  *
- * <p>The golden file was generated from the implementation at 6d9c721 plus the working tree of
- * 18 November 2026, before any probe optimisation. Regenerate it only for an intended semantic
- * change: {@code -PwriteProbeGolden=<absolute path>}.
+ * <p>The golden files were generated from the probe before any optimisation, and the current
+ * probe must still reproduce them. Regenerate them only for an intended semantic change:
+ * {@code -PwriteProbeGolden=<absolute path>}.
  */
 public class ProbeSemanticsGoldenTest
 {
@@ -49,9 +49,9 @@ public class ProbeSemanticsGoldenTest
 	private static final String STRESS_GOLDEN = "probe-stress-golden.txt";
 
 	/**
-	 * Every optimisation level must reproduce the golden fingerprints of the original
-	 * implementation. With {@code -PwriteProbeGolden=<file>} the seeded corpus is written from
-	 * level 0 instead; {@code -PwriteProbeGolden=<file>|<stress file>} also writes the stress corpus.
+	 * The probe must reproduce the golden fingerprints. With {@code -PwriteProbeGolden=<file>}
+	 * the seeded corpus is written instead; {@code -PwriteProbeGolden=<file>|<stress file>} also
+	 * writes the stress corpus.
 	 */
 	@Test
 	public void probeSemanticsMatchGolden() throws Exception
@@ -60,40 +60,32 @@ public class ProbeSemanticsGoldenTest
 		if (!write.isEmpty())
 		{
 			String[] files = write.split("\\|");
-			List<String> seeded = run(0, corpus());
+			List<String> seeded = run(corpus());
 			Files.write(Paths.get(files[0]), seeded, StandardCharsets.UTF_8);
 			System.out.println("PROBEGOLDEN wrote " + seeded.size() + " cases to " + files[0]);
 			if (files.length > 1)
 			{
-				List<String> stress = run(0, stressCorpus());
+				List<String> stress = run(stressCorpus());
 				Files.write(Paths.get(files[1]), stress, StandardCharsets.UTF_8);
 				System.out.println("PROBEGOLDEN wrote " + stress.size() + " cases to " + files[1]);
 			}
 			return;
 		}
-		List<Case> corpus = corpus();
-		for (int level = 0; level <= SubmenuPrototypeProbe.MAX_OPTIMISATION; level++)
-		{
-			compare("level " + level + " seeded corpus", golden(GOLDEN), run(level, corpus));
-		}
+		compare("seeded corpus", golden(GOLDEN), run(corpus()));
 	}
 
 	@Test
 	public void stressCorpusMatchesGolden() throws Exception
 	{
 		assumeTrue(System.getProperty("rightclickstyler.writeProbeGolden", "").isEmpty());
-		List<Case> corpus = stressCorpus();
-		for (int level = 0; level <= SubmenuPrototypeProbe.MAX_OPTIMISATION; level++)
-		{
-			compare("level " + level + " stress corpus", golden(STRESS_GOLDEN), run(level, corpus));
-		}
+		compare("stress corpus", golden(STRESS_GOLDEN), run(stressCorpus()));
 	}
 
 	/** Sanity: the stress corpus reaches the limits and failure paths it exists for. */
 	@Test
 	public void stressCorpusExercisesItsEdgeCases() throws Exception
 	{
-		String all = String.join("\n", run(0, stressCorpus()));
+		String all = String.join("\n", run(stressCorpus()));
 		for (String expected : new String[]{
 			"footprint scan limit exceeded", "candidate pixel area limit exceeded", "threw=IllegalStateException",
 			"ambiguous root geometry", "native draw missed buffer", "|ACTIVE|", "|NO_CHILD|", "exact=RESOLVED"})
@@ -126,7 +118,7 @@ public class ProbeSemanticsGoldenTest
 	@Test
 	public void corpusExercisesEveryProbeOutcome() throws Exception
 	{
-		String all = String.join("\n", run(0, corpus()));
+		String all = String.join("\n", run(corpus()));
 		for (String expected : new String[]{
 			"|NO_CHILD|", "|ACTIVE|", "|AMBIGUOUS|", "|FAILURE|", "|GEOMETRY_CHANGED|",
 			"footprint matched", "native draw missed buffer", "ambiguous geometry index=",
@@ -165,29 +157,21 @@ public class ProbeSemanticsGoldenTest
 	}
 
 	/** One reused instance in sequence, as live, each case checked against a fresh instance. */
-	static List<String> run(int level, List<Case> cases)
+	static List<String> run(List<Case> cases)
 	{
-		SubmenuPrototypeProbe shared = probe(level);
+		NativeSubmenuProbe shared = new NativeSubmenuProbe();
 		List<String> lines = new ArrayList<>();
 		for (Case c : cases)
 		{
 			String reused = c.fingerprint(shared);
-			assertTrue("level " + level + " left scratch state dirty after " + reused, shared.scratchClean());
-			SubmenuPrototypeProbe fresh = probe(level);
+			assertTrue("scratch state left dirty after " + reused, shared.scratchClean());
+			NativeSubmenuProbe fresh = new NativeSubmenuProbe();
 			String isolated = c.fingerprint(fresh);
-			assertTrue("level " + level + " left scratch state dirty after " + isolated, fresh.scratchClean());
-			assertEquals("level " + level + ": reused and fresh probe instances disagree", isolated, reused);
+			assertTrue("scratch state left dirty after " + isolated, fresh.scratchClean());
+			assertEquals("reused and fresh probe instances disagree", isolated, reused);
 			lines.add(reused);
 		}
 		return lines;
-	}
-
-	static SubmenuPrototypeProbe probe(int level)
-	{
-		SubmenuPrototypeProbe probe = new SubmenuPrototypeProbe();
-		probe.requireExact(true);
-		probe.setOptimisation(level);
-		return probe;
 	}
 
 	private static List<String> golden(String name) throws Exception
@@ -205,7 +189,7 @@ public class ProbeSemanticsGoldenTest
 		return lines;
 	}
 
-	static String fingerprint(String id, SubmenuPrototypeProbe.Result r, boolean restoredExactly)
+	static String fingerprint(String id, NativeSubmenuProbe.Result r, boolean restoredExactly)
 	{
 		ExactCoverageResolver.Outcome e = r.exact;
 		return id + "|" + r.state + "|" + r.reason
@@ -227,7 +211,7 @@ public class ProbeSemanticsGoldenTest
 
 	interface Case
 	{
-		String fingerprint(SubmenuPrototypeProbe probe);
+		String fingerprint(NativeSubmenuProbe probe);
 	}
 
 	/** A logged geometry with one replay hypothesis drawn: root only (-1) or root plus one candidate. */
@@ -243,7 +227,7 @@ public class ProbeSemanticsGoldenTest
 		}
 
 		@Override
-		public String fingerprint(SubmenuPrototypeProbe probe)
+		public String fingerprint(NativeSubmenuProbe probe)
 		{
 			LoggedAmbiguousReplayTest.Replay replay = new LoggedAmbiguousReplayTest.Replay(record);
 			int[] pixels = noise(new Random(record[1].hashCode() * 31L + hypothesis), replay.width * replay.height);
@@ -255,7 +239,7 @@ public class ProbeSemanticsGoldenTest
 				drawn.add(ExactCoverageResolverTest.bounds(replay.candidates.get(hypothesis)));
 			}
 			SubmenuTree tree = SubmenuTree.capture(replay.root);
-			SubmenuPrototypeProbe.Result result = probe.samplePixels(pixels, replay.width, replay.height, tree,
+			NativeSubmenuProbe.Result result = probe.samplePixels(pixels, replay.width, replay.height, tree,
 				() -> paint(pixels, replay.width, replay.height, drawn));
 			return ProbeSemanticsGoldenTest.fingerprint("log:" + record[0] + ":" + record[1] + ":h" + hypothesis,
 				result, Arrays.equals(before, pixels));
@@ -274,7 +258,7 @@ public class ProbeSemanticsGoldenTest
 		}
 
 		@Override
-		public String fingerprint(SubmenuPrototypeProbe probe)
+		public String fingerprint(NativeSubmenuProbe probe)
 		{
 			Random random = new Random(SEED * 1_000_003L + index);
 			int[] canvas = CANVASES[random.nextInt(CANVASES.length)];
@@ -396,7 +380,7 @@ public class ProbeSemanticsGoldenTest
 			int[] pixels = noise(random, width * height);
 			int[] before = pixels.clone();
 			SubmenuTree tree = SubmenuTree.capture(root);
-			SubmenuPrototypeProbe.Result result = probe.samplePixels(pixels, width, height, tree, () ->
+			NativeSubmenuProbe.Result result = probe.samplePixels(pixels, width, height, tree, () ->
 			{
 				if (paint)
 				{

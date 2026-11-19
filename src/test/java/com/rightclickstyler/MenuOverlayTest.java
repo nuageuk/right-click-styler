@@ -1,6 +1,5 @@
 package com.rightclickstyler;
 
-import com.google.gson.Gson;
 import java.awt.AlphaComposite;
 import java.awt.Color;
 import java.awt.Graphics2D;
@@ -13,10 +12,8 @@ import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import net.runelite.api.Actor;
-import net.runelite.api.BufferProvider;
 import net.runelite.api.Client;
 import net.runelite.api.Menu;
 import net.runelite.api.MenuAction;
@@ -24,7 +21,6 @@ import net.runelite.api.MenuEntry;
 import net.runelite.api.NPC;
 import net.runelite.api.Player;
 import net.runelite.api.Point;
-import net.runelite.api.Rasterizer;
 import net.runelite.api.events.BeforeMenuRender;
 import net.runelite.api.widgets.Widget;
 import org.junit.Test;
@@ -137,7 +133,7 @@ public class MenuOverlayTest
 		MenuRenderer.TargetKind headerKind;
 	}
 
-	/** Fills every node in tree order, as the prototype renderer does along the open chain. */
+	/** Fills every node in tree order, as the submenu renderer does along the open chain. */
 	private static List<FilledMenu> fill(SubmenuTree tree)
 	{
 		List<FilledMenu> filled = new ArrayList<>();
@@ -320,10 +316,10 @@ public class MenuOverlayTest
 		root.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Visible", visible),
 			new StubMenuEntry("Clipped", clipped), new StubMenuEntry("Outside", outside)});
 		int[] pixels = new int[200 * 100];
-		SubmenuPrototypeProbe.Result result = SubmenuPrototypeProbe.probePixels(
+		NativeSubmenuProbe.Result result = NativeSubmenuProbe.probePixels(
 			pixels, 200, 100, SubmenuTree.capture(root),
 			() -> paint(pixels, 200, 100, root, visible));
-		assertEquals(SubmenuPrototypeProbe.State.ACTIVE, result.state);
+		assertEquals(NativeSubmenuProbe.State.ACTIVE, result.state);
 		assertEquals(2, result.visibleCandidates);
 		assertEquals(40L * 34 + 20L * 30, result.candidatePixels);
 		assertTrue(result.restored);
@@ -399,21 +395,21 @@ public class MenuOverlayTest
 
 		int[] pixels = new int[130 * 110];
 		int[] original = pixels.clone();
-		SubmenuPrototypeProbe.Result nestedResult = SubmenuPrototypeProbe.probePixels(pixels, 130, 110,
+		NativeSubmenuProbe.Result nestedResult = NativeSubmenuProbe.probePixels(pixels, 130, 110,
 			tree, () -> paint(pixels, 130, 110, root, first, nested));
-		assertEquals(SubmenuPrototypeProbe.State.ACTIVE, nestedResult.state);
+		assertEquals(NativeSubmenuProbe.State.ACTIVE, nestedResult.state);
 		assertTrue(Arrays.equals(new int[]{0, 1}, nestedResult.activeChain));
 		assertTrue(Arrays.equals(original, pixels));
 
-		SubmenuPrototypeProbe.Result sibling = SubmenuPrototypeProbe.probePixels(pixels, 130, 110,
+		NativeSubmenuProbe.Result sibling = NativeSubmenuProbe.probePixels(pixels, 130, 110,
 			tree, () -> paint(pixels, 130, 110, root, second));
-		assertEquals(SubmenuPrototypeProbe.State.ACTIVE, sibling.state);
+		assertEquals(NativeSubmenuProbe.State.ACTIVE, sibling.state);
 		assertTrue(Arrays.equals(new int[]{2}, sibling.activeChain));
 		assertTrue(Arrays.equals(original, pixels));
 
-		SubmenuPrototypeProbe.Result stale = SubmenuPrototypeProbe.probePixels(pixels, 130, 110,
+		NativeSubmenuProbe.Result stale = NativeSubmenuProbe.probePixels(pixels, 130, 110,
 			tree, () -> paint(pixels, 130, 110, root));
-		assertEquals(SubmenuPrototypeProbe.State.NO_CHILD, stale.state);
+		assertEquals(NativeSubmenuProbe.State.NO_CHILD, stale.state);
 		assertTrue(Arrays.equals(original, pixels));
 	}
 
@@ -454,9 +450,9 @@ public class MenuOverlayTest
 		root.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Parent", child)});
 		SubmenuTree tree = SubmenuTree.capture(root);
 		int[] pixels = new int[100 * 100];
-		SubmenuPrototypeProbe.Result ambiguous = SubmenuPrototypeProbe.probePixels(pixels, 100, 100,
+		NativeSubmenuProbe.Result ambiguous = NativeSubmenuProbe.probePixels(pixels, 100, 100,
 			tree, () -> paint(pixels, 100, 100, root, child));
-		assertEquals(SubmenuPrototypeProbe.State.AMBIGUOUS, ambiguous.state);
+		assertEquals(NativeSubmenuProbe.State.AMBIGUOUS, ambiguous.state);
 		assertTrue(ambiguous.reason.startsWith("ambiguous geometry index=0"));
 
 		StubMenu outside = new StubMenu(70, 20, 20, 20);
@@ -466,7 +462,7 @@ public class MenuOverlayTest
 		int[] original = pixels.clone();
 		try
 		{
-			SubmenuPrototypeProbe.probePixels(pixels, 100, 100, drawable, () ->
+			NativeSubmenuProbe.probePixels(pixels, 100, 100, drawable, () ->
 			{
 				paint(pixels, 100, 100, root, outside);
 				throw new IllegalStateException("synthetic draw failure");
@@ -480,7 +476,7 @@ public class MenuOverlayTest
 	}
 
 	@Test
-	public void reusesSnapshotAndWitnessBuffersAcrossFrames()
+	public void reusesSnapshotAndWitnessBuffersAcrossFrames() throws Exception
 	{
 		StubMenu root = new StubMenu(10, 10, 40, 49);
 		StubMenu child = new StubMenu(50, 15, 30, 34);
@@ -488,14 +484,16 @@ public class MenuOverlayTest
 		root.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Parent", child)});
 		SubmenuTree tree = SubmenuTree.capture(root);
 		int[] pixels = new int[100 * 80];
-		SubmenuPrototypeProbe probe = new SubmenuPrototypeProbe();
-		SubmenuPrototypeProbe.Result first = probe.samplePixels(pixels, 100, 80, tree,
+		NativeSubmenuProbe probe = new NativeSubmenuProbe();
+		probe.samplePixels(pixels, 100, 80, tree, () -> paint(pixels, 100, 80, root, child));
+		Object snapshot = privateField(probe, "snapshot");
+		Object witnesses = privateField(probe, "exclusivePool");
+		NativeSubmenuProbe.Result second = probe.samplePixels(pixels, 100, 80, tree,
 			() -> paint(pixels, 100, 80, root, child));
-		SubmenuPrototypeProbe.Result second = probe.samplePixels(pixels, 100, 80, tree,
-			() -> paint(pixels, 100, 80, root, child));
-		assertEquals(SubmenuPrototypeProbe.State.ACTIVE, second.state);
-		assertTrue(first.allocatedBytesMin > second.allocatedBytesMin);
-		assertEquals(8000, second.copiedPixels);
+		assertEquals(NativeSubmenuProbe.State.ACTIVE, second.state);
+		assertEquals(1, second.drawPasses);
+		assertTrue(snapshot == privateField(probe, "snapshot"));
+		assertTrue(witnesses == privateField(probe, "exclusivePool"));
 		assertTrue(Arrays.equals(new int[8000], pixels));
 	}
 
@@ -510,9 +508,9 @@ public class MenuOverlayTest
 		assertTrue(tree.nodes.get(0).childOpensLeft[0]);
 		assertEquals(new Rectangle(45, 15, 35, 34), tree.nodes.get(1).bounds);
 		int[] pixels = new int[100 * 80];
-		SubmenuPrototypeProbe.Result result = SubmenuPrototypeProbe.probePixels(pixels, 100, 80,
+		NativeSubmenuProbe.Result result = NativeSubmenuProbe.probePixels(pixels, 100, 80,
 			tree, () -> paint(pixels, 100, 80, root, child));
-		assertEquals(SubmenuPrototypeProbe.State.ACTIVE, result.state);
+		assertEquals(NativeSubmenuProbe.State.ACTIVE, result.state);
 		assertTrue(Arrays.equals(new int[8000], pixels));
 	}
 
@@ -527,30 +525,30 @@ public class MenuOverlayTest
 		root.setMenuEntries(new MenuEntry[]{
 			new StubMenuEntry("First", first), new StubMenuEntry("Second", second)});
 		int[] pixels = new int[120 * 100];
-		SubmenuPrototypeProbe probe = new SubmenuPrototypeProbe();
+		NativeSubmenuProbe probe = new NativeSubmenuProbe();
 		SubmenuTree tree = SubmenuTree.capture(root);
-		assertEquals(SubmenuPrototypeProbe.State.NO_CHILD,
+		assertEquals(NativeSubmenuProbe.State.NO_CHILD,
 			probe.samplePixels(pixels, 120, 100, tree,
 				() -> paint(pixels, 120, 100, root)).state);
 
 		first.setBounds(50, 15, 35, 34);
 		tree = SubmenuTree.capture(root);
-		SubmenuPrototypeProbe.Result activeFirst = probe.samplePixels(pixels, 120, 100,
+		NativeSubmenuProbe.Result activeFirst = probe.samplePixels(pixels, 120, 100,
 			tree, () -> paint(pixels, 120, 100, root, first));
-		assertEquals(SubmenuPrototypeProbe.State.ACTIVE, activeFirst.state);
+		assertEquals(NativeSubmenuProbe.State.ACTIVE, activeFirst.state);
 		assertTrue(Arrays.equals(new int[]{0}, activeFirst.activeChain));
 
 		first.setBounds(0, 0, 0, 0);
 		tree = SubmenuTree.capture(root);
-		assertEquals(SubmenuPrototypeProbe.State.NO_CHILD,
+		assertEquals(NativeSubmenuProbe.State.NO_CHILD,
 			probe.samplePixels(pixels, 120, 100, tree,
 				() -> paint(pixels, 120, 100, root)).state);
 
 		second.setBounds(50, 30, 35, 34);
 		tree = SubmenuTree.capture(root);
-		SubmenuPrototypeProbe.Result activeSecond = probe.samplePixels(pixels, 120, 100,
+		NativeSubmenuProbe.Result activeSecond = probe.samplePixels(pixels, 120, 100,
 			tree, () -> paint(pixels, 120, 100, root, second));
-		assertEquals(SubmenuPrototypeProbe.State.ACTIVE, activeSecond.state);
+		assertEquals(NativeSubmenuProbe.State.ACTIVE, activeSecond.state);
 		assertTrue(Arrays.equals(new int[]{1}, activeSecond.activeChain));
 		assertTrue(Arrays.equals(new int[120 * 100], pixels));
 
@@ -558,7 +556,7 @@ public class MenuOverlayTest
 		StubMenu unopenedChild = new StubMenu(0, 0, 0, 0);
 		unopenedChild.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Action", null)});
 		reopened.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Open", unopenedChild)});
-		assertEquals(SubmenuPrototypeProbe.State.NO_CHILD,
+		assertEquals(NativeSubmenuProbe.State.NO_CHILD,
 			probe.samplePixels(pixels, 120, 100, SubmenuTree.capture(reopened),
 				() -> paint(pixels, 120, 100, reopened)).state);
 	}
@@ -572,17 +570,17 @@ public class MenuOverlayTest
 		root.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Open", child)});
 		int[] pixels = new int[100 * 80];
 		SubmenuTree before = SubmenuTree.capture(root);
-		SubmenuPrototypeProbe.Result changed = SubmenuPrototypeProbe.probePixels(pixels, 100, 80,
+		NativeSubmenuProbe.Result changed = NativeSubmenuProbe.probePixels(pixels, 100, 80,
 			before, () ->
 			{
 				child.setBounds(50, 15, 30, 34);
 				paint(pixels, 100, 80, root, child);
 			});
-		assertEquals(SubmenuPrototypeProbe.State.GEOMETRY_CHANGED, changed.state);
+		assertEquals(NativeSubmenuProbe.State.GEOMETRY_CHANGED, changed.state);
 		assertTrue(Arrays.equals(new int[8000], pixels));
-		SubmenuPrototypeProbe.Result retried = SubmenuPrototypeProbe.probePixels(pixels, 100, 80,
+		NativeSubmenuProbe.Result retried = NativeSubmenuProbe.probePixels(pixels, 100, 80,
 			SubmenuTree.capture(root), () -> paint(pixels, 100, 80, root, child));
-		assertEquals(SubmenuPrototypeProbe.State.ACTIVE, retried.state);
+		assertEquals(NativeSubmenuProbe.State.ACTIVE, retried.state);
 		assertTrue(Arrays.equals(new int[]{0}, retried.activeChain));
 	}
 
@@ -594,9 +592,9 @@ public class MenuOverlayTest
 		staleChild.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Action", null)});
 		root.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Open", staleChild)});
 		int[] pixels = new int[100 * 80];
-		SubmenuPrototypeProbe.Result rootOnly = SubmenuPrototypeProbe.probePixels(pixels, 100, 80,
+		NativeSubmenuProbe.Result rootOnly = NativeSubmenuProbe.probePixels(pixels, 100, 80,
 			SubmenuTree.capture(root), () -> paint(pixels, 100, 80, root));
-		assertEquals(SubmenuPrototypeProbe.State.NO_CHILD, rootOnly.state);
+		assertEquals(NativeSubmenuProbe.State.NO_CHILD, rootOnly.state);
 		assertTrue(Arrays.equals(new int[8000], pixels));
 	}
 
@@ -623,7 +621,7 @@ public class MenuOverlayTest
 		for (int active : sequence)
 		{
 			SubmenuTree tree = SubmenuTree.capture(root);
-			SubmenuPrototypeProbe.Result result = SubmenuPrototypeProbe.probePixels(
+			NativeSubmenuProbe.Result result = NativeSubmenuProbe.probePixels(
 				pixels, 160, 130, tree, () ->
 				{
 					paint(pixels, 160, 130, root);
@@ -633,7 +631,7 @@ public class MenuOverlayTest
 					}
 				});
 			assertEquals("active=" + active + " reason=" + result.reason,
-				active < 0 ? SubmenuPrototypeProbe.State.NO_CHILD : SubmenuPrototypeProbe.State.ACTIVE,
+				active < 0 ? NativeSubmenuProbe.State.NO_CHILD : NativeSubmenuProbe.State.ACTIVE,
 				result.state);
 			assertTrue(Arrays.equals(active < 0 ? new int[0] : new int[]{active}, result.activeChain));
 			assertEquals(0, result.witnesses[6]);
@@ -663,13 +661,13 @@ public class MenuOverlayTest
 		}
 		root.setMenuEntries(entries);
 		int[] pixels = new int[900 * 500];
-		SubmenuPrototypeProbe probe = new SubmenuPrototypeProbe();
+		NativeSubmenuProbe probe = new NativeSubmenuProbe();
 		int[] sequence = {-1, 0, 1, 2, 3, 4, 3, 1, 4, 2, 0, -1};
 		int oldFallbacks = 0;
 		int[] nativeDraws = {0};
 		for (int active : sequence)
 		{
-			SubmenuPrototypeProbe.Result result = probe.samplePixels(pixels, 900, 500,
+			NativeSubmenuProbe.Result result = probe.samplePixels(pixels, 900, 500,
 				SubmenuTree.capture(root), () ->
 				{
 					nativeDraws[0]++;
@@ -680,7 +678,7 @@ public class MenuOverlayTest
 					}
 				});
 			assertEquals("child=" + active + " reason=" + result.reason,
-				active < 0 ? SubmenuPrototypeProbe.State.NO_CHILD : SubmenuPrototypeProbe.State.ACTIVE,
+				active < 0 ? NativeSubmenuProbe.State.NO_CHILD : NativeSubmenuProbe.State.ACTIVE,
 				result.state);
 			assertTrue("wrong child=" + active,
 				Arrays.equals(active < 0 ? new int[0] : new int[]{active}, result.activeChain));
@@ -697,10 +695,10 @@ public class MenuOverlayTest
 		}
 		assertEquals("previous overlap guard rejected these six frames", 6, oldFallbacks);
 		assertEquals("one native draw per sample", sequence.length, nativeDraws[0]);
-		SubmenuPrototypeProbe.Result combined = probe.samplePixels(pixels, 900, 500,
+		NativeSubmenuProbe.Result combined = probe.samplePixels(pixels, 900, 500,
 			SubmenuTree.capture(root), () -> paint(pixels, 900, 500, root, children[1], children[3]));
 		assertEquals("two visible siblings must not become one themed child",
-			SubmenuPrototypeProbe.State.AMBIGUOUS, combined.state);
+			NativeSubmenuProbe.State.AMBIGUOUS, combined.state);
 		assertEquals(0, combined.footprintMatches);
 		try
 		{
@@ -715,9 +713,9 @@ public class MenuOverlayTest
 		{
 			assertTrue(Arrays.equals(new int[pixels.length], pixels));
 		}
-		SubmenuPrototypeProbe.Result afterFailure = probe.samplePixels(pixels, 900, 500,
+		NativeSubmenuProbe.Result afterFailure = probe.samplePixels(pixels, 900, 500,
 			SubmenuTree.capture(root), () -> paint(pixels, 900, 500, root, children[2]));
-		assertEquals(SubmenuPrototypeProbe.State.ACTIVE, afterFailure.state);
+		assertEquals(NativeSubmenuProbe.State.ACTIVE, afterFailure.state);
 		assertTrue(Arrays.equals(new int[]{2}, afterFailure.activeChain));
 	}
 
@@ -744,14 +742,14 @@ public class MenuOverlayTest
 			root.setMenuEntries(entries);
 			int width = opensLeft ? 900 : 360;
 			int[] pixels = new int[width * 500];
-			SubmenuPrototypeProbe probe = new SubmenuPrototypeProbe();
+			NativeSubmenuProbe probe = new NativeSubmenuProbe();
 			for (int active = 0; active < children.length; active++)
 			{
 				StubMenu child = children[active];
-				SubmenuPrototypeProbe.Result result = probe.samplePixels(pixels, width, 500,
+				NativeSubmenuProbe.Result result = probe.samplePixels(pixels, width, 500,
 					SubmenuTree.capture(root), () -> paint(pixels, width, 500, root, child));
 				assertEquals("opensLeft=" + opensLeft + " child=" + active + " reason=" + result.reason,
-					SubmenuPrototypeProbe.State.ACTIVE, result.state);
+					NativeSubmenuProbe.State.ACTIVE, result.state);
 				assertTrue(Arrays.equals(new int[]{active}, result.activeChain));
 			}
 		}
@@ -772,9 +770,9 @@ public class MenuOverlayTest
 		root.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Parent", parent),
 			new StubMenuEntry("Upper", upper), new StubMenuEntry("Lower", lower)});
 		int[] pixels = new int[900 * 500];
-		SubmenuPrototypeProbe.Result result = SubmenuPrototypeProbe.probePixels(pixels, 900, 500,
+		NativeSubmenuProbe.Result result = NativeSubmenuProbe.probePixels(pixels, 900, 500,
 			SubmenuTree.capture(root), () -> paint(pixels, 900, 500, root, parent, nested));
-		assertEquals(result.reason, SubmenuPrototypeProbe.State.ACTIVE, result.state);
+		assertEquals(result.reason, NativeSubmenuProbe.State.ACTIVE, result.state);
 		assertTrue(Arrays.equals(new int[]{0, 1}, result.activeChain));
 		assertEquals(0, result.witnesses[0]);
 		assertEquals(1, result.footprintMatches);
@@ -793,12 +791,12 @@ public class MenuOverlayTest
 			new StubMenuEntry("First", first), new StubMenuEntry("Second", second)});
 		int[] pixels = new int[100 * 80];
 		SubmenuTree tree = SubmenuTree.capture(root);
-		SubmenuPrototypeProbe.Result dormant = SubmenuPrototypeProbe.probePixels(pixels, 100, 80,
+		NativeSubmenuProbe.Result dormant = NativeSubmenuProbe.probePixels(pixels, 100, 80,
 			tree, () -> paint(pixels, 100, 80, root));
-		assertEquals(SubmenuPrototypeProbe.State.NO_CHILD, dormant.state);
-		SubmenuPrototypeProbe.Result active = SubmenuPrototypeProbe.probePixels(pixels, 100, 80,
+		assertEquals(NativeSubmenuProbe.State.NO_CHILD, dormant.state);
+		NativeSubmenuProbe.Result active = NativeSubmenuProbe.probePixels(pixels, 100, 80,
 			tree, () -> paint(pixels, 100, 80, root, first));
-		assertEquals(SubmenuPrototypeProbe.State.AMBIGUOUS, active.state);
+		assertEquals(NativeSubmenuProbe.State.AMBIGUOUS, active.state);
 		assertTrue(active.reason.startsWith("ambiguous geometry index="));
 		assertTrue(active.sharedChanged[0] > 0);
 		assertEquals(2, active.footprintMatches);
@@ -823,14 +821,14 @@ public class MenuOverlayTest
 		assertEquals(229, viewport.rowTop(22));
 		assertEquals(109, viewport.rowTop(14));
 		int[] pixels = new int[990 * 592];
-		SubmenuPrototypeProbe probe = new SubmenuPrototypeProbe();
-		SubmenuPrototypeProbe.Result first = probe.samplePixels(pixels, 990, 592, tree,
+		NativeSubmenuProbe probe = new NativeSubmenuProbe();
+		NativeSubmenuProbe.Result first = probe.samplePixels(pixels, 990, 592, tree,
 			() -> paint(pixels, 990, 592, menus.root, menus.first));
-		SubmenuPrototypeProbe.Result second = probe.samplePixels(pixels, 990, 592, tree,
+		NativeSubmenuProbe.Result second = probe.samplePixels(pixels, 990, 592, tree,
 			() -> paint(pixels, 990, 592, menus.root, menus.second));
-		for (SubmenuPrototypeProbe.Result result : new SubmenuPrototypeProbe.Result[]{first, second})
+		for (NativeSubmenuProbe.Result result : new NativeSubmenuProbe.Result[]{first, second})
 		{
-			assertEquals(SubmenuPrototypeProbe.State.AMBIGUOUS, result.state);
+			assertEquals(NativeSubmenuProbe.State.AMBIGUOUS, result.state);
 			assertEquals(2, result.footprintMatches);
 			assertTrue(result.restored);
 		}
@@ -859,9 +857,9 @@ public class MenuOverlayTest
 		assertEquals(529, viewport.rowTop(59));
 		assertEquals(184, viewport.rowTop(36));
 		int[] pixels = new int[990 * 592];
-		SubmenuPrototypeProbe.Result result = new SubmenuPrototypeProbe().samplePixels(
+		NativeSubmenuProbe.Result result = new NativeSubmenuProbe().samplePixels(
 			pixels, 990, 592, tree, () -> paint(pixels, 990, 592, menus.root, menus.second));
-		assertEquals(result.reason, SubmenuPrototypeProbe.State.AMBIGUOUS, result.state);
+		assertEquals(result.reason, NativeSubmenuProbe.State.AMBIGUOUS, result.state);
 		assertEquals(2, result.footprintMatches);
 		assertTrue(result.restored);
 		assertTrue(Arrays.equals(new int[pixels.length], pixels));
@@ -878,12 +876,12 @@ public class MenuOverlayTest
 		assertFalse(viewport.containsRow(59));
 		assertTrue(viewport.containsRow(36));
 		int[] pixels = new int[990 * 592];
-		SubmenuPrototypeProbe probe = new SubmenuPrototypeProbe();
+		NativeSubmenuProbe probe = new NativeSubmenuProbe();
 		for (StubMenu drawn : new StubMenu[]{menus.first, menus.second})
 		{
-			SubmenuPrototypeProbe.Result result = probe.samplePixels(pixels, 990, 592,
+			NativeSubmenuProbe.Result result = probe.samplePixels(pixels, 990, 592,
 				tree, () -> paint(pixels, 990, 592, menus.root, drawn));
-			assertEquals(SubmenuPrototypeProbe.State.AMBIGUOUS, result.state);
+			assertEquals(NativeSubmenuProbe.State.AMBIGUOUS, result.state);
 			assertEquals(2, result.footprintMatches);
 			assertTrue(result.restored);
 		}
@@ -944,15 +942,15 @@ public class MenuOverlayTest
 			new StubMenuEntry("Left", left), new StubMenuEntry("Right", right)});
 		int[] pixels = new int[100 * 80];
 		SubmenuTree tree = SubmenuTree.capture(root);
-		SubmenuPrototypeProbe.Result rootOnly = SubmenuPrototypeProbe.probePixels(pixels, 100, 80,
+		NativeSubmenuProbe.Result rootOnly = NativeSubmenuProbe.probePixels(pixels, 100, 80,
 			tree, () -> paint(pixels, 100, 80, root));
-		assertEquals(SubmenuPrototypeProbe.State.NO_CHILD, rootOnly.state);
+		assertEquals(NativeSubmenuProbe.State.NO_CHILD, rootOnly.state);
 		for (int index = 0; index < 2; index++)
 		{
 			StubMenu child = index == 0 ? left : right;
-			SubmenuPrototypeProbe.Result result = SubmenuPrototypeProbe.probePixels(pixels, 100, 80,
+			NativeSubmenuProbe.Result result = NativeSubmenuProbe.probePixels(pixels, 100, 80,
 				tree, () -> paint(pixels, 100, 80, root, child));
-			assertEquals(SubmenuPrototypeProbe.State.ACTIVE, result.state);
+			assertEquals(NativeSubmenuProbe.State.ACTIVE, result.state);
 			assertTrue(Arrays.equals(new int[]{index}, result.activeChain));
 			assertTrue(Arrays.equals(new int[pixels.length], pixels));
 		}
@@ -966,17 +964,17 @@ public class MenuOverlayTest
 		child.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Action", null)});
 		root.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Open", child)});
 		int[] pixels = new int[100 * 80];
-		SubmenuPrototypeProbe.Result changed = SubmenuPrototypeProbe.probePixels(pixels, 100, 80,
+		NativeSubmenuProbe.Result changed = NativeSubmenuProbe.probePixels(pixels, 100, 80,
 			SubmenuTree.capture(root), () ->
 			{
 				child.setBounds(70, 15, 30, 34);
 				paint(pixels, 100, 80, root, child);
 			});
-		assertEquals(SubmenuPrototypeProbe.State.GEOMETRY_CHANGED, changed.state);
+		assertEquals(NativeSubmenuProbe.State.GEOMETRY_CHANGED, changed.state);
 		assertTrue(Arrays.equals(new int[pixels.length], pixels));
-		SubmenuPrototypeProbe.Result retried = SubmenuPrototypeProbe.probePixels(pixels, 100, 80,
+		NativeSubmenuProbe.Result retried = NativeSubmenuProbe.probePixels(pixels, 100, 80,
 			SubmenuTree.capture(root), () -> paint(pixels, 100, 80, root, child));
-		assertEquals(SubmenuPrototypeProbe.State.ACTIVE, retried.state);
+		assertEquals(NativeSubmenuProbe.State.ACTIVE, retried.state);
 	}
 
 	@Test(expected = IllegalArgumentException.class)
@@ -1117,7 +1115,7 @@ public class MenuOverlayTest
 			graphics.dispose();
 		}
 		assertEquals("consumed frame cannot restore native pixels", 0, image.getRGB(10, 10));
-		assertEquals(1L, privateField(overlay, "prototypeChangedDrops"));
+		assertEquals(1L, privateField(overlay, "submenuChangedDrops"));
 		assertFalse((boolean) privateField(overlay, "prepared"));
 	}
 
@@ -1128,8 +1126,7 @@ public class MenuOverlayTest
 		root.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Action", null)});
 		MenuOverlay overlay = preparedOverlay(root);
 		overlay.render(null);
-		assertEquals(1L, privateField(overlay, "prototypeBlitFailures"));
-		assertTrue((boolean) privateField(overlay, "prototypeBlitFailed"));
+		assertTrue((boolean) privateField(overlay, "submenuBlitFailed"));
 		assertFalse((boolean) privateField(overlay, "prepared"));
 		assertFalse("later menu events must remain native",
 			overlay.prepareSubmenuFrame(root, root.getMenuEntries(), new Point(20, 30)));
@@ -1247,7 +1244,7 @@ public class MenuOverlayTest
 		setPrivateField(overlay, "preparedRoot", root);
 		setPrivateField(overlay, "preparedState", PreparedMenuState.capture(
 			SubmenuTree.capture(root), new int[0]));
-		setPrivateField(overlay, "prototypeImage", new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB));
+		setPrivateField(overlay, "submenuImage", new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB));
 		return overlay;
 	}
 
@@ -1400,15 +1397,15 @@ public class MenuOverlayTest
 		ScrollableMenuViewport viewport = ScrollableMenuViewport.capture(
 			new Rectangle(702, 0, 160, 619), 40, 900, 300, true, 10);
 		int[] pixels = new int[900 * 300];
-		SubmenuPrototypeProbe probe = new SubmenuPrototypeProbe();
+		NativeSubmenuProbe probe = new NativeSubmenuProbe();
 		for (int active : new int[]{0, 1, 2, 3, 4, 3, 2, 1, 0})
 		{
 			StubMenu child = children[active];
 			SubmenuTree tree = SubmenuTree.capture(root);
-			SubmenuPrototypeProbe.Result result = probe.samplePixels(pixels, 900, 300,
+			NativeSubmenuProbe.Result result = probe.samplePixels(pixels, 900, 300,
 				tree, () -> paint(pixels, 900, 300, root, child));
 			assertEquals("child=" + active + " reason=" + result.reason,
-				SubmenuPrototypeProbe.State.ACTIVE, result.state);
+				NativeSubmenuProbe.State.ACTIVE, result.state);
 			assertTrue(Arrays.equals(new int[]{4 - active}, result.activeChain));
 			assertEquals(null, MenuOverlay.unsafeScrolledChild(tree, result.activeChain, viewport, 300));
 			assertTrue(Arrays.equals(new int[pixels.length], pixels));
@@ -1437,16 +1434,16 @@ public class MenuOverlayTest
 				new Rectangle(rootX, 0, 110, 619), 40, width, height, true, 22);
 			assertTrue(viewport != null);
 			int[] pixels = new int[width * height];
-			SubmenuPrototypeProbe probe = new SubmenuPrototypeProbe();
+			NativeSubmenuProbe probe = new NativeSubmenuProbe();
 			SubmenuTree tree = SubmenuTree.capture(root);
-			SubmenuPrototypeProbe.Result closed = probe.samplePixels(pixels, width, height,
+			NativeSubmenuProbe.Result closed = probe.samplePixels(pixels, width, height,
 				tree, () -> paint(pixels, width, height, root));
-			assertEquals(SubmenuPrototypeProbe.State.NO_CHILD, closed.state);
+			assertEquals(NativeSubmenuProbe.State.NO_CHILD, closed.state);
 			assertTrue(Arrays.equals(new int[pixels.length], pixels));
-			SubmenuPrototypeProbe.Result active = probe.samplePixels(pixels, width, height,
+			NativeSubmenuProbe.Result active = probe.samplePixels(pixels, width, height,
 				tree, () -> paint(pixels, width, height, root, child));
 			assertEquals("left=" + opensLeft + " reason=" + active.reason,
-				SubmenuPrototypeProbe.State.ACTIVE, active.state);
+				NativeSubmenuProbe.State.ACTIVE, active.state);
 			assertTrue(Arrays.equals(new int[]{0}, active.activeChain));
 			assertEquals(null, MenuOverlay.unsafeScrolledChild(tree, active.activeChain,
 				viewport, height));
@@ -1471,7 +1468,7 @@ public class MenuOverlayTest
 		root.setMenuEntries(entries);
 		children[25].setBounds(833, 270, 230, 67);
 		children[20].setBounds(840, 270, 223, 67);
-		SubmenuPrototypeProbe probe = new SubmenuPrototypeProbe();
+		NativeSubmenuProbe probe = new NativeSubmenuProbe();
 		for (int scroll : new int[]{0, 2, 3, 5, 6, 7, 18, 19, 5, 0})
 		{
 			int activeIndex = scroll == 6 || scroll == 7 ? 20 : 25;
@@ -1483,17 +1480,17 @@ public class MenuOverlayTest
 			if (scroll == 19)
 			{
 				assertFalse(viewport.containsRow(18));
-				SubmenuPrototypeProbe.Result rootOnly = probe.samplePixels(pixels, width, height,
+				NativeSubmenuProbe.Result rootOnly = probe.samplePixels(pixels, width, height,
 					tree, () -> paint(pixels, width, height, root));
-				assertEquals(SubmenuPrototypeProbe.State.NO_CHILD, rootOnly.state);
+				assertEquals(NativeSubmenuProbe.State.NO_CHILD, rootOnly.state);
 				assertTrue(Arrays.equals(new int[pixels.length], pixels));
 				continue;
 			}
 			StubMenu active = children[activeIndex];
-			SubmenuPrototypeProbe.Result result = probe.samplePixels(pixels, width, height,
+			NativeSubmenuProbe.Result result = probe.samplePixels(pixels, width, height,
 				tree, () -> paint(pixels, width, height, root, active));
 			assertEquals("scroll=" + scroll + " reason=" + result.reason,
-				SubmenuPrototypeProbe.State.ACTIVE, result.state);
+				NativeSubmenuProbe.State.ACTIVE, result.state);
 			assertTrue(Arrays.equals(new int[]{activeIndex}, result.activeChain));
 			assertEquals(activeIndex, tree.nodes.get(activeIndex + 1).parentEntryIndex);
 			int row = 43 - activeIndex;
@@ -1533,15 +1530,15 @@ public class MenuOverlayTest
 		ScrollableMenuViewport scrolled = ScrollableMenuViewport.capture(
 			new Rectangle(650, 0, 180, 679), 44, 1100, 300, true, 3);
 		int[] pixels = new int[1100 * 300];
-		SubmenuPrototypeProbe probe = new SubmenuPrototypeProbe();
-		SubmenuPrototypeProbe.Result rootOnly = probe.samplePixels(pixels, 1100, 300,
+		NativeSubmenuProbe probe = new NativeSubmenuProbe();
+		NativeSubmenuProbe.Result rootOnly = probe.samplePixels(pixels, 1100, 300,
 			tree, () -> paint(pixels, 1100, 300, root));
-		assertEquals(SubmenuPrototypeProbe.State.NO_CHILD, rootOnly.state);
+		assertEquals(NativeSubmenuProbe.State.NO_CHILD, rootOnly.state);
 		assertTrue(MenuOverlay.validateScrolledChild(tree, new int[]{0}, scrolled, 300,
 			rootOnly).reason.contains("detached"));
-		SubmenuPrototypeProbe.Result active = probe.samplePixels(pixels, 1100, 300,
+		NativeSubmenuProbe.Result active = probe.samplePixels(pixels, 1100, 300,
 			tree, () -> paint(pixels, 1100, 300, root, child25));
-		assertEquals(SubmenuPrototypeProbe.State.ACTIVE, active.state);
+		assertEquals(NativeSubmenuProbe.State.ACTIVE, active.state);
 		assertTrue(Arrays.equals(new int[]{0}, active.activeChain));
 		assertTrue(MenuOverlay.validateScrolledChild(tree, new int[]{1}, scrolled, 300,
 			active).reason.contains("detached"));
@@ -1572,33 +1569,32 @@ public class MenuOverlayTest
 		ScrollableMenuViewport scrolled = ScrollableMenuViewport.capture(
 			new Rectangle(650, 0, 180, 679), 44, 1100, 300, true, 3);
 		int[] pixels = new int[1100 * 300];
-		SubmenuPrototypeProbe probe = new SubmenuPrototypeProbe();
-		probe.requireExact(true);
-		SubmenuPrototypeProbe.Result rootOnly = probe.samplePixels(pixels, 1100, 300,
+		NativeSubmenuProbe probe = new NativeSubmenuProbe();
+		NativeSubmenuProbe.Result rootOnly = probe.samplePixels(pixels, 1100, 300,
 			tree, () -> paint(pixels, 1100, 300, root));
 		assertEquals(ExactCoverageResolver.State.RESOLVED, rootOnly.exact.state);
 		assertTrue(MenuOverlay.validateScrolledChild(tree, new int[]{0}, scrolled, 300,
-			rootOnly, true).reason.contains("detached"));
-		SubmenuPrototypeProbe.Result active = probe.samplePixels(pixels, 1100, 300,
+			rootOnly).reason.contains("detached"));
+		NativeSubmenuProbe.Result active = probe.samplePixels(pixels, 1100, 300,
 			tree, () -> paint(pixels, 1100, 300, root, child25));
 		assertEquals(ExactCoverageResolver.State.RESOLVED, active.exact.state);
 		assertTrue(Arrays.equals(new int[]{0}, active.exact.chain));
 		MenuOverlay.ScrollChildValidation proven = MenuOverlay.validateScrolledChild(tree, new int[]{0},
-			scrolled, 300, active, true);
+			scrolled, 300, active);
 		assertEquals(null, proven.reason);
 		assertTrue("drawn at its retained position, proven by the exact reading", proven.detached);
 		assertTrue("a child off the resolved chain is never proven",
-			MenuOverlay.validateScrolledChild(tree, new int[]{1}, scrolled, 300, active, true)
+			MenuOverlay.validateScrolledChild(tree, new int[]{1}, scrolled, 300, active)
 				.reason.contains("detached"));
 		ScrollableMenuViewport offscreen = ScrollableMenuViewport.capture(
 			new Rectangle(650, 0, 180, 679), 44, 1100, 300, true, 19);
 		assertTrue("a scrolled-out parent stays unsupported",
-			MenuOverlay.validateScrolledChild(tree, new int[]{0}, offscreen, 300, active, true)
+			MenuOverlay.validateScrolledChild(tree, new int[]{0}, offscreen, 300, active)
 				.reason.contains("outside the root viewport"));
 		active.exact = new ExactCoverageResolver.Outcome(ExactCoverageResolver.State.AMBIGUOUS,
 			new int[0], 2, new int[]{0}, active.exact.changedPixels);
 		assertTrue("an unresolved reading proves nothing",
-			MenuOverlay.validateScrolledChild(tree, new int[]{0}, scrolled, 300, active, true)
+			MenuOverlay.validateScrolledChild(tree, new int[]{0}, scrolled, 300, active)
 				.reason.contains("exact=AMBIGUOUS"));
 		assertTrue(Arrays.equals(new int[pixels.length], pixels));
 	}
@@ -1640,12 +1636,12 @@ public class MenuOverlayTest
 							Math.min(rowTop + 1, 299))));
 						int[] pixels = new int[900 * 300];
 						StubMenu active = children[entryIndex];
-						SubmenuPrototypeProbe.Result result = SubmenuPrototypeProbe.probePixels(
+						NativeSubmenuProbe.Result result = NativeSubmenuProbe.probePixels(
 							pixels, 900, 300, tree,
 							() -> paint(pixels, 900, 300, root, active));
 						assertEquals("count=" + count + " scroll=" + scroll + " row=" + row
 							+ " reason=" + result.reason,
-							SubmenuPrototypeProbe.State.ACTIVE, result.state);
+							NativeSubmenuProbe.State.ACTIVE, result.state);
 						assertTrue(Arrays.equals(new int[]{entryIndex}, result.activeChain));
 						assertEquals(entryIndex, tree.nodes.get(entryIndex + 1).parentEntryIndex);
 						assertEquals(null, MenuOverlay.unsafeScrolledChild(tree,
@@ -1676,11 +1672,11 @@ public class MenuOverlayTest
 		for (int activeIndex : new int[]{34, 35})
 		{
 			int[] pixels = new int[900 * 300];
-			SubmenuPrototypeProbe.Result result = SubmenuPrototypeProbe.probePixels(
+			NativeSubmenuProbe.Result result = NativeSubmenuProbe.probePixels(
 				pixels, 900, 300, SubmenuTree.capture(root),
 				() -> paint(pixels, 900, 300, root, children[activeIndex]));
 			assertEquals("index=" + activeIndex + " reason=" + result.reason,
-				SubmenuPrototypeProbe.State.ACTIVE, result.state);
+				NativeSubmenuProbe.State.ACTIVE, result.state);
 			assertTrue(Arrays.equals(new int[]{activeIndex}, result.activeChain));
 			assertTrue(Arrays.equals(new int[pixels.length], pixels));
 		}
@@ -1747,9 +1743,9 @@ public class MenuOverlayTest
 		root.setMenuEntries(entries);
 		int[] pixels = new int[900 * 600];
 		boolean[] called = {false};
-		SubmenuPrototypeProbe.Result result = SubmenuPrototypeProbe.probePixels(
+		NativeSubmenuProbe.Result result = NativeSubmenuProbe.probePixels(
 			pixels, 900, 600, SubmenuTree.capture(root), () -> called[0] = true);
-		assertEquals(SubmenuPrototypeProbe.State.UNSUPPORTED, result.state);
+		assertEquals(NativeSubmenuProbe.State.UNSUPPORTED, result.state);
 		assertTrue(result.reason.contains("candidate pixel area limit exceeded"));
 		assertFalse(called[0]);
 		assertTrue(Arrays.equals(new int[pixels.length], pixels));
@@ -2084,701 +2080,6 @@ public class MenuOverlayTest
 				}
 			}
 		}
-	}
-
-	/** Synthetic complete-pipeline timing. It is not a RuneLite frame benchmark. */
-	public static void main(String[] args)
-	{
-		if (args.length == 1 && "retained".equals(args[0]))
-		{
-			benchmarkDistribution("retained-scroll-bounds", 44, 44, 5, 3, 3, false, false,
-				BuiltInThemes.find("classic"));
-			return;
-		}
-		benchmarkCoverageClear();
-		benchmarkDistributionScenarios();
-		benchmark(800, 600);
-		benchmark(1920, 1080);
-		benchmarkOverlappingCandidates();
-		benchmarkScrollableRoot();
-		benchmarkLargeScrollableMenus();
-		benchmarkRetainedGeometry();
-	}
-
-	private static void benchmarkCoverageClear()
-	{
-		final int width = 1920, height = 1080, samples = 4000, warmups = 500;
-		short[] coverage = new short[width * height];
-		long[] full = new long[samples], rootOnly = new long[samples];
-		for (int i = -warmups; i < samples; i++)
-		{
-			long start = System.nanoTime();
-			Arrays.fill(coverage, (short) 0);
-			if (i >= 0)
-			{
-				full[i] = System.nanoTime() - start;
-			}
-			start = System.nanoTime();
-			for (int y = 100; y < 385; y++)
-			{
-				Arrays.fill(coverage, y * width + 700, y * width + 860, (short) 0);
-			}
-			if (i >= 0)
-			{
-				rootOnly[i] = System.nanoTime() - start;
-			}
-		}
-		System.out.printf("SYNTHETIC CLEAR 1920x1080 full=%s root-region=%s samples=%d%n",
-			stats(full), stats(rootOnly), samples);
-	}
-
-	/** Deterministic fake-draw workloads. Times include no RuneLite client work. */
-	private static void benchmarkDistributionScenarios()
-	{
-		benchmarkDistribution("ordinary-root", 8, 0, 0, 0, 0, false, false,
-			BuiltInThemes.find("classic"));
-		benchmarkDistribution("one-child", 8, 1, 1, 0, 0, false, false,
-			BuiltInThemes.find("classic"));
-		benchmarkDistribution("five-overlap", 8, 5, 5, 3, 0, false, false,
-			BuiltInThemes.find("classic"));
-		benchmarkDistribution("long-nonscrollable-14", 15, 14, 14, 8, 0, false, false,
-			BuiltInThemes.find("classic"));
-		benchmarkDistribution("twenty-candidates", 20, 20, 20, 3, 0, false, false,
-			BuiltInThemes.find("classic"));
-		benchmarkDistribution("forty-candidates", 40, 40, 40, 3, 0, false, false,
-			BuiltInThemes.find("classic"));
-		benchmarkDistribution("large-scroll-root", 120, 0, 0, 0, 50, false, false,
-			BuiltInThemes.find("classic"));
-		benchmarkDistribution("scroll-active-child", 120, 120, 1, 0, 50, false, false,
-			BuiltInThemes.find("classic"));
-		benchmarkDistribution("rapid-switching", 8, 5, 5, 15, 0, false, true,
-			BuiltInThemes.find("classic"));
-		benchmarkDistribution("retained-scroll-bounds", 44, 44, 5, 3, 3, false, false,
-			BuiltInThemes.find("classic"));
-		benchmarkDistribution("scrollable-retained-57", 59, 57, 34, 8, 0, false, false,
-			BuiltInThemes.find("classic"));
-		benchmarkDistribution("canvas-edge", 8, 1, 1, 0, 0, true, false,
-			BuiltInThemes.find("classic"));
-		benchmarkDistribution("dormant-children", 40, 40, 0, 0, 0, false, false,
-			BuiltInThemes.find("classic"));
-		benchmarkDistribution("glass-sans-font", 8, 1, 1, 0, 0, false, false,
-			BuiltInThemes.find("glass").withFont(FontChoice.SANS).withFontSize(14));
-	}
-
-	private static void benchmarkDistribution(String name, int rootCount, int candidateCount,
-		int visibleCount, int spacing, int scroll, boolean edge, boolean switching, Theme theme)
-	{
-		final int width = 1100, height = 300;
-		final boolean retained = "retained-scroll-bounds".equals(name);
-		final int warmups = retained ? 400 : 40, samples = retained ? 400 : 160;
-		StubMenu root = new StubMenu(700, 15, 160,
-			MenuRenderer.HEADER_HEIGHT + rootCount * MenuRenderer.ROW_HEIGHT);
-		int visibleStart = scroll == 0 ? 0 : rootCount - scroll - (visibleCount == 1 ? 3 : 11);
-		StubMenu[] children = new StubMenu[candidateCount];
-		MenuEntry[] entries = new MenuEntry[rootCount];
-		List<MenuRenderer.Row> rootRows = new ArrayList<>();
-		for (int i = 0; i < rootCount; i++)
-		{
-			StubMenu child = null;
-			if (i < candidateCount)
-			{
-				int x = edge ? 1050 : 520;
-				int y = 35 + i * spacing;
-				boolean visible = i >= visibleStart && i < visibleStart + visibleCount;
-				child = new StubMenu(visible ? x : 0, visible ? y : 0,
-					visible ? 180 : 0, visible ? 49 : 0);
-				child.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Action", null)});
-				children[i] = child;
-			}
-			entries[i] = new StubMenuEntry("Option " + i, child);
-			rootRows.add(new MenuRenderer.Row("Option " + i, "", MenuRenderer.TargetKind.OTHER));
-		}
-		root.setMenuEntries(entries);
-		int[] pixels = new int[width * height];
-		BufferedImage themed = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
-		BufferedImage output = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
-		MenuRenderer renderer = new MenuRenderer();
-		RightClickStylerConfig config = new RightClickStylerConfig() { };
-		List<MenuRenderer.Row> childRows = Collections.singletonList(
-			new MenuRenderer.Row("Action", "", MenuRenderer.TargetKind.OTHER));
-		SubmenuPrototypeProbe probe = new SubmenuPrototypeProbe();
-		java.lang.management.ThreadMXBean baseBean =
-			java.lang.management.ManagementFactory.getThreadMXBean();
-		com.sun.management.ThreadMXBean allocationBean = baseBean instanceof com.sun.management.ThreadMXBean
-			? (com.sun.management.ThreadMXBean) baseBean : null;
-		boolean allocated = allocationBean != null && allocationBean.isThreadAllocatedMemorySupported();
-		if (allocated && !allocationBean.isThreadAllocatedMemoryEnabled())
-		{
-			allocationBean.setThreadAllocatedMemoryEnabled(true);
-		}
-		long threadId = Thread.currentThread().getId();
-		long[] total = new long[samples], capture = new long[samples], viewportTime = new long[samples];
-		long[] prep = new long[samples], copy = new long[samples], marker = new long[samples];
-		long[] nativeDraw = new long[samples], witness = new long[samples], restore = new long[samples];
-		long[] decision = new long[samples], render = new long[samples], blit = new long[samples];
-		long[] allocatedBytes = new long[samples];
-		String lastState = "NORMAL";
-		SubmenuPrototypeProbe.Result lastResult = null;
-		long cold = 0;
-		long gcBefore = -1, compilationBefore = -1;
-		java.lang.management.CompilationMXBean compilation =
-			java.lang.management.ManagementFactory.getCompilationMXBean();
-		for (int iteration = 0; iteration < warmups + samples; iteration++)
-		{
-			if (iteration == warmups)
-			{
-				gcBefore = gcCollections();
-				compilationBefore = compilation != null && compilation.isCompilationTimeMonitoringSupported()
-					? compilation.getTotalCompilationTime() : -1;
-			}
-			int activeIndex = visibleCount == 0 ? -1
-				: visibleStart + (switching ? iteration % visibleCount : 0);
-			StubMenu active = activeIndex < 0 ? null : children[activeIndex];
-			long allocationStart = allocated ? allocationBean.getThreadAllocatedBytes(threadId) : 0;
-			long start = System.nanoTime();
-			long phase = System.nanoTime();
-			SubmenuTree tree = candidateCount > 0 || scroll > 0
-				? SubmenuTree.capture(root, entries, scroll) : null;
-			long captureNs = System.nanoTime() - phase;
-			phase = System.nanoTime();
-			ScrollableMenuViewport viewport = scroll > 0
-				? ScrollableMenuViewport.capture(new Rectangle(root.x, root.y, root.width, root.height),
-					rootCount, width, height, true, scroll) : null;
-			if (scroll > 0 && viewport == null)
-			{
-				throw new AssertionError("invalid benchmark viewport");
-			}
-			long viewportNs = System.nanoTime() - phase;
-			SubmenuPrototypeProbe.Result result = tree == null ? null
-				: probe.samplePixels(pixels, width, height, tree,
-					() -> paint(pixels, width, height, active == null
-						? new StubMenu[]{root} : new StubMenu[]{root, active}));
-			phase = System.nanoTime();
-			Graphics2D g = themed.createGraphics();
-			try
-			{
-				g.setComposite(java.awt.AlphaComposite.Clear);
-				g.fillRect(0, 0, width, height);
-				g.setComposite(java.awt.AlphaComposite.SrcOver);
-				if (result == null || result.state == SubmenuPrototypeProbe.State.ACTIVE
-					|| result.state == SubmenuPrototypeProbe.State.NO_CHILD)
-				{
-					renderer.render(g, null, theme, config, rootRows,
-						new Rectangle(root.x, root.y, root.width, root.height), -1, 0,
-						"Choose Option", scroll);
-					if (result != null && result.state == SubmenuPrototypeProbe.State.ACTIVE)
-					{
-						for (int index : result.activeChain)
-						{
-							StubMenu child = children[index];
-							renderer.render(g, null, theme, config, childRows,
-								new Rectangle(child.x, child.y, child.width, child.height),
-								-1, 0, "Item");
-						}
-						}
-				}
-			}
-			finally
-			{
-				g.dispose();
-			}
-			long renderNs = System.nanoTime() - phase;
-			phase = System.nanoTime();
-			Graphics2D dst = output.createGraphics();
-			try
-			{
-				dst.drawImage(themed, 0, 0, null);
-			}
-			finally
-			{
-				dst.dispose();
-			}
-			long blitNs = System.nanoTime() - phase;
-			long elapsed = System.nanoTime() - start;
-			if (iteration == 0)
-			{
-				cold = elapsed;
-			}
-			if (iteration < warmups)
-			{
-				continue;
-			}
-			int sample = iteration - warmups;
-			total[sample] = elapsed;
-			capture[sample] = captureNs;
-			viewportTime[sample] = viewportNs;
-			prep[sample] = result == null ? 0 : result.preparationNanos;
-			copy[sample] = result == null ? 0 : result.copyNanos;
-			marker[sample] = result == null ? 0 : result.markerNanos;
-			nativeDraw[sample] = result == null ? 0 : result.drawNanos;
-			witness[sample] = result == null ? 0 : result.comparisonNanos;
-			restore[sample] = result == null ? 0 : result.restoreNanos;
-			decision[sample] = result == null ? 0 : result.decisionNanos;
-			render[sample] = renderNs;
-			blit[sample] = blitNs;
-			allocatedBytes[sample] = allocated
-				? allocationBean.getThreadAllocatedBytes(threadId) - allocationStart : -1;
-			lastState = result == null ? "NORMAL" : result.state.name();
-			lastResult = result;
-		}
-		System.out.printf("SYNTHETIC DIST %s state=%s rootRows=%d scrollable=%s scroll=%d candidates=%d visibleCandidates=%d candidatePixels=%d cold=%.3fms total=%s capture=%s viewport=%s prep=%s copy=%s marker=%s native=%s witness=%s decision=%s restore=%s render=%s blit=%s alloc=%s bytes samples=%d%n",
-			name, lastState, rootCount, root.height > height, scroll, candidateCount,
-			lastResult == null ? 0 : lastResult.visibleCandidates,
-			lastResult == null ? 0 : lastResult.candidatePixels,
-			cold / 1_000_000.0,
-			stats(total), stats(capture), stats(viewportTime), stats(prep), stats(copy),
-			stats(marker), stats(nativeDraw), stats(witness), stats(decision),
-			stats(restore), stats(render), stats(blit), statsBytes(allocatedBytes), samples);
-		if (retained)
-		{
-			int slowest = 0;
-			for (int i = 1; i < total.length; i++)
-			{
-				if (total[i] > total[slowest])
-				{
-					slowest = i;
-				}
-			}
-			long compilationAfter = compilation != null && compilation.isCompilationTimeMonitoringSupported()
-				? compilation.getTotalCompilationTime() : -1;
-			System.out.printf("SYNTHETIC RETAINED warmups=%d gcCollections=%d compilationMs=%d slowestSample=%d total=%.3fms prep=%.3fms marker=%.3fms decision=%.3fms render=%.3fms blit=%.3fms actualHeapAllocated=%dB%n",
-				warmups, gcCollections() - gcBefore,
-				compilationBefore < 0 ? -1 : compilationAfter - compilationBefore,
-				slowest, total[slowest] / 1_000_000.0,
-				prep[slowest] / 1_000_000.0, marker[slowest] / 1_000_000.0,
-				decision[slowest] / 1_000_000.0, render[slowest] / 1_000_000.0,
-				blit[slowest] / 1_000_000.0, allocatedBytes[slowest]);
-		}
-	}
-
-	private static long gcCollections()
-	{
-		long count = 0;
-		for (java.lang.management.GarbageCollectorMXBean bean :
-			java.lang.management.ManagementFactory.getGarbageCollectorMXBeans())
-		{
-			long value = bean.getCollectionCount();
-			if (value >= 0)
-			{
-				count += value;
-			}
-		}
-		return count;
-	}
-
-	private static String stats(long[] values)
-	{
-		long[] sorted = values.clone();
-		Arrays.sort(sorted);
-		long sum = 0;
-		for (long value : sorted)
-		{
-			sum += value;
-		}
-		return String.format("%.3f/%.3f/%.3f/%.3f/%.3fms",
-			sum / (values.length * 1_000_000.0), sorted[values.length / 2] / 1_000_000.0,
-			sorted[(int) Math.ceil(values.length * 0.95) - 1] / 1_000_000.0,
-			sorted[(int) Math.ceil(values.length * 0.99) - 1] / 1_000_000.0,
-			sorted[values.length - 1] / 1_000_000.0);
-	}
-
-	private static String statsBytes(long[] values)
-	{
-		if (values[0] < 0)
-		{
-			return "unavailable";
-		}
-		long[] sorted = values.clone();
-		Arrays.sort(sorted);
-		long sum = 0;
-		for (long value : sorted)
-		{
-			sum += value;
-		}
-		return String.format("%.0f/%d/%d/%d/%d", sum / (double) values.length,
-			sorted[values.length / 2], sorted[(int) Math.ceil(values.length * 0.95) - 1],
-			sorted[(int) Math.ceil(values.length * 0.99) - 1], sorted[values.length - 1]);
-	}
-
-	private static void benchmarkRetainedGeometry()
-	{
-		int width = 1100;
-		int height = 300;
-		StubMenu root = new StubMenu(650, 0, 180, 679);
-		StubMenu[] children = new StubMenu[44];
-		MenuEntry[] entries = new MenuEntry[44];
-		for (int i = 0; i < children.length; i++)
-		{
-			children[i] = new StubMenu(0, 0, 0, 0);
-			children[i].setMenuEntries(new MenuEntry[]{new StubMenuEntry("Follow", null)});
-			entries[i] = new StubMenuEntry("Player " + i, children[i]);
-		}
-		root.setMenuEntries(entries);
-		SubmenuPrototypeProbe probe = new SubmenuPrototypeProbe();
-		for (int retained : new int[]{1, 10})
-		for (int spacing : retained == 1 ? new int[]{8} : new int[]{4, 8})
-		{
-			for (int i = 0; i < children.length; i++)
-			{
-				children[i].setBounds(0, 0, 0, 0);
-			}
-			children[25].setBounds(833, 270, 230, 67);
-			for (int i = 0; i < retained - 1; i++)
-			{
-				int index = 20 + i;
-				if (index == 25)
-				{
-					index = 30;
-				}
-				children[index].setBounds(833 + (i + 1) * spacing, 270 - (i + 1) * 3,
-					230 - (i + 1) * spacing, 67);
-			}
-			int[] pixels = new int[width * height];
-			for (int i = 0; i < 30; i++)
-			{
-				probe.samplePixels(pixels, width, height, SubmenuTree.capture(root, entries, 3),
-					() -> paint(pixels, width, height, root, children[25]));
-			}
-			long total = 0;
-			long nativeDraw = 0;
-			long allocated = 0;
-			long passes = 0;
-			long prep = 0, copy = 0, marker = 0, compare = 0, restore = 0, decision = 0;
-			for (int i = 0; i < 100; i++)
-			{
-				SubmenuPrototypeProbe.Result result = probe.samplePixels(pixels, width, height,
-					SubmenuTree.capture(root, entries, 3),
-					() -> paint(pixels, width, height, root, children[25]));
-				if (result.state != SubmenuPrototypeProbe.State.ACTIVE
-					|| !Arrays.equals(new int[]{25}, result.activeChain))
-				{
-					throw new AssertionError("retained geometry decision: " + result.reason);
-				}
-				total += result.nanoseconds;
-				nativeDraw += result.drawNanos;
-				allocated += result.allocatedBytesMin;
-				passes += result.drawPasses;
-				prep += result.preparationNanos;
-				copy += result.copyNanos;
-				marker += result.markerNanos;
-				compare += result.comparisonNanos;
-				restore += result.restoreNanos;
-				decision += result.decisionNanos;
-			}
-			System.out.printf("SYNTHETIC RETAINED 1100x300 candidates=44 visible=%d spacing=%d probe=%.3fms prep=%.3fms copy=%.3fms marker=%.3fms compare=%.3fms restore=%.3fms decision=%.3fms inner-draw=%.3fms passes=%.1f min-new-bytes=%.0f samples=100%n",
-				retained, spacing, total / 100_000_000.0,
-				prep / 100_000_000.0, copy / 100_000_000.0,
-				marker / 100_000_000.0, compare / 100_000_000.0,
-				restore / 100_000_000.0, decision / 100_000_000.0,
-				nativeDraw / 100_000_000.0, passes / 100.0, allocated / 100.0);
-		}
-	}
-
-	private static void benchmarkLargeScrollableMenus()
-	{
-		int width = 900;
-		int height = 300;
-		for (int count : new int[]{20, 40, 60, 120})
-		{
-			int menuHeight = MenuRenderer.HEADER_HEIGHT + count * MenuRenderer.ROW_HEIGHT;
-			int maxScroll = (menuHeight - height + 14) / 15;
-			for (int scroll : new int[]{0, maxScroll / 2, maxScroll})
-			{
-				StubMenu root = new StubMenu(702, 0, 160, menuHeight);
-				MenuEntry[] entries = new MenuEntry[count];
-				List<MenuRenderer.Row> rootRows = new ArrayList<>();
-				StubMenu active = null;
-				int activeEntry = count - 1 - (scroll + 2);
-				for (int i = 0; i < count; i++)
-				{
-					StubMenu child = new StubMenu(i == activeEntry ? 480 : 0,
-						i == activeEntry ? 40 : 0,
-						i == activeEntry ? 220 : 0,
-						i == activeEntry ? 67 : 0);
-					child.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Follow", null)});
-					entries[i] = new StubMenuEntry("Player " + i, child);
-					rootRows.add(new MenuRenderer.Row("Player " + i, "", MenuRenderer.TargetKind.PLAYER));
-					if (i == activeEntry)
-					{
-						active = child;
-					}
-				}
-				root.setMenuEntries(entries);
-				int[] pixels = new int[width * height];
-				BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
-				MenuRenderer renderer = new MenuRenderer();
-				RightClickStylerConfig config = new RightClickStylerConfig() { };
-				Theme theme = BuiltInThemes.find("glass");
-				List<MenuRenderer.Row> childRows = Collections.singletonList(
-					new MenuRenderer.Row("Follow", "", MenuRenderer.TargetKind.OTHER));
-				SubmenuPrototypeProbe probe = new SubmenuPrototypeProbe();
-				for (int i = 0; i < 30; i++)
-				{
-					scrollBenchmarkFrame(pixels, width, height, root, active, scroll,
-						image, renderer, config, theme, rootRows, childRows, probe);
-				}
-				long total = 0;
-				long probeTotal = 0;
-				long drawTotal = 0;
-				for (int i = 0; i < 100; i++)
-				{
-					long start = System.nanoTime();
-					SubmenuPrototypeProbe.Result result = scrollBenchmarkFrame(
-						pixels, width, height, root, active, scroll,
-						image, renderer, config, theme, rootRows, childRows, probe);
-					total += System.nanoTime() - start;
-					probeTotal += result.nanoseconds;
-					drawTotal += result.drawNanos;
-				}
-				System.out.printf("SYNTHETIC LARGE 900x300 entries=%d scroll=%d candidates=%d complete=%.3fms probe=%.3fms inner-draw=%.3fms samples=100%n",
-					count, scroll, count - scroll, total / 100_000_000.0,
-					probeTotal / 100_000_000.0, drawTotal / 100_000_000.0);
-			}
-		}
-	}
-
-	private static void benchmarkScrollableRoot()
-	{
-		int width = 900;
-		int height = 300;
-		int scroll = 10;
-		StubMenu root = new StubMenu(702, 0, 160, 619);
-		StubMenu[] children = new StubMenu[5];
-		MenuEntry[] entries = new MenuEntry[40];
-		List<MenuRenderer.Row> rootRows = new ArrayList<>();
-		for (int i = 0; i < 40; i++)
-		{
-			entries[i] = new StubMenuEntry("Option " + i, null);
-			rootRows.add(new MenuRenderer.Row("Option " + i, "", MenuRenderer.TargetKind.OTHER));
-		}
-		int[] lefts = {480, 489, 518, 517, 487};
-		int[] widths = {222, 213, 184, 185, 215};
-		for (int i = 0; i < children.length; i++)
-		{
-			children[i] = new StubMenu(lefts[i], 40 + i * 15, widths[i], 67);
-			children[i].setMenuEntries(new MenuEntry[]{new StubMenuEntry("Follow", null)});
-			entries[27 - i] = new StubMenuEntry("Player " + i, children[i]);
-		}
-		root.setMenuEntries(entries);
-		StubMenu active = children[2];
-		int[] pixels = new int[width * height];
-		BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
-		MenuRenderer renderer = new MenuRenderer();
-		RightClickStylerConfig config = new RightClickStylerConfig() { };
-		Theme theme = BuiltInThemes.find("glass");
-		List<MenuRenderer.Row> childRows = Collections.singletonList(
-			new MenuRenderer.Row("Follow", "", MenuRenderer.TargetKind.OTHER));
-		SubmenuPrototypeProbe probe = new SubmenuPrototypeProbe();
-		for (int i = 0; i < 30; i++)
-		{
-			scrollBenchmarkFrame(pixels, width, height, root, active, scroll,
-				image, renderer, config, theme, rootRows, childRows, probe);
-		}
-		long nativeStart = System.nanoTime();
-		for (int i = 0; i < 100; i++)
-		{
-			paint(pixels, width, height, root, active);
-		}
-		long fakeNative = System.nanoTime() - nativeStart;
-		long complete = 0;
-		long probeNanos = 0;
-		long drawNanos = 0;
-		for (int i = 0; i < 100; i++)
-		{
-			long start = System.nanoTime();
-			SubmenuPrototypeProbe.Result result = scrollBenchmarkFrame(pixels, width, height,
-				root, active, scroll, image, renderer, config, theme, rootRows, childRows, probe);
-			complete += System.nanoTime() - start;
-			probeNanos += result.nanoseconds;
-			drawNanos += result.drawNanos;
-		}
-		System.out.printf("SYNTHETIC SCROLL 900x300 root-rows=40 children=5 scroll=%d fake-native=%.3fms complete=%.3fms probe=%.3fms inner-draw=%.3fms samples=100%n",
-			scroll, fakeNative / 100_000_000.0, complete / 100_000_000.0,
-			probeNanos / 100_000_000.0, drawNanos / 100_000_000.0);
-	}
-
-	private static SubmenuPrototypeProbe.Result scrollBenchmarkFrame(int[] pixels,
-		int width, int height, StubMenu root, StubMenu active, int scroll,
-		BufferedImage image, MenuRenderer renderer, RightClickStylerConfig config,
-		Theme theme, List<MenuRenderer.Row> rootRows, List<MenuRenderer.Row> childRows,
-		SubmenuPrototypeProbe probe)
-	{
-		SubmenuTree tree = SubmenuTree.capture(root, root.getMenuEntries(), scroll);
-		ScrollableMenuViewport viewport = ScrollableMenuViewport.capture(
-			tree.nodes.get(0).bounds, rootRows.size(), width, height, true, scroll);
-		if (viewport == null)
-		{
-			throw new AssertionError("invalid scroll viewport");
-		}
-		SubmenuPrototypeProbe.Result result = probe.samplePixels(pixels, width, height,
-			tree, () -> paint(pixels, width, height, root, active));
-		if (result.state != SubmenuPrototypeProbe.State.ACTIVE
-			|| MenuOverlay.unsafeScrolledChild(tree, result.activeChain, viewport, height) != null)
-		{
-			throw new AssertionError("unexpected scroll decision: " + result.reason);
-		}
-		Graphics2D g = image.createGraphics();
-		try
-		{
-			g.setComposite(java.awt.AlphaComposite.Clear);
-			g.fillRect(0, 0, width, height);
-			g.setComposite(java.awt.AlphaComposite.SrcOver);
-			renderer.render(g, null, theme, config, rootRows,
-				tree.nodes.get(0).bounds, -1, 0, "Choose Option", scroll);
-			renderer.render(g, null, theme, config, childRows,
-				new Rectangle(active.x, active.y, active.width, active.height),
-				-1, 0, "Player 2");
-		}
-		finally
-		{
-			g.dispose();
-		}
-		return result;
-	}
-
-	private static void benchmarkOverlappingCandidates()
-	{
-		int[][] nativeBounds = {
-			{480, 326, 222, 67}, {489, 311, 213, 67}, {518, 296, 184, 67},
-			{517, 281, 185, 67}, {487, 266, 215, 67}
-		};
-		StubMenu root = new StubMenu(702, 250, 160, 150);
-		StubMenu[] children = new StubMenu[5];
-		MenuEntry[] entries = new MenuEntry[5];
-		for (int i = 0; i < 5; i++)
-		{
-			int[] b = nativeBounds[i];
-			children[i] = new StubMenu(b[0], b[1], b[2], b[3]);
-			children[i].setMenuEntries(new MenuEntry[]{new StubMenuEntry("Action", null)});
-			entries[i] = new StubMenuEntry("Player " + i, children[i]);
-		}
-		root.setMenuEntries(entries);
-		int[] pixels = new int[900 * 500];
-		SubmenuPrototypeProbe probe = new SubmenuPrototypeProbe();
-		for (int i = 0; i < 30; i++)
-		{
-			probe.samplePixels(pixels, 900, 500, SubmenuTree.capture(root),
-				() -> paint(pixels, 900, 500, root, children[2]));
-		}
-		long baselineStart = System.nanoTime();
-		for (int i = 0; i < 100; i++)
-		{
-			paint(pixels, 900, 500, root, children[2]);
-		}
-		long baseline = System.nanoTime() - baselineStart;
-		long probeTotal = 0;
-		long nativeTotal = 0;
-		for (int i = 0; i < 100; i++)
-		{
-			SubmenuPrototypeProbe.Result result = probe.samplePixels(pixels, 900, 500,
-				SubmenuTree.capture(root), () -> paint(pixels, 900, 500, root, children[2]));
-			if (result.state != SubmenuPrototypeProbe.State.ACTIVE
-				|| !Arrays.equals(new int[]{2}, result.activeChain))
-			{
-				throw new AssertionError("unexpected footprint decision: " + result.reason);
-			}
-			probeTotal += result.nanoseconds;
-			nativeTotal += result.drawNanos;
-		}
-		System.out.printf("SYNTHETIC OVERLAP 900x500 baseline=%.3fms probe=%.3fms inner-draw=%.3fms samples=100%n",
-			baseline / 100_000_000.0, probeTotal / 100_000_000.0,
-			nativeTotal / 100_000_000.0);
-	}
-
-	private static void benchmark(int width, int height)
-	{
-		StubMenu root = new StubMenu(50, 50, 200, 280);
-		StubMenu child = new StubMenu(250, 70, 180, 260);
-		child.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Follow", null)});
-		root.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Options", child)});
-		int[] pixels = new int[width * height];
-		Rectangle rootBounds = new Rectangle(root.x, root.y, root.width, root.height);
-		Rectangle childBounds = new Rectangle(child.x, child.y, child.width, child.height);
-		Rectangle region = rootBounds.union(childBounds);
-		region.grow(3, 3);
-		BufferedImage themed = new BufferedImage(region.width, region.height, BufferedImage.TYPE_INT_ARGB);
-		MenuRenderer renderer = new MenuRenderer();
-		RightClickStylerConfig config = new RightClickStylerConfig() { };
-		Theme theme = BuiltInThemes.find("glass");
-		MenuRenderer.Row rootRow = new MenuRenderer.Row("Options", "", MenuRenderer.TargetKind.OTHER);
-		rootRow.set("Options", "", MenuRenderer.TargetKind.OTHER, true, false);
-		java.util.List<MenuRenderer.Row> rootRows = Collections.singletonList(rootRow);
-		java.util.List<MenuRenderer.Row> childRows = Collections.singletonList(
-			new MenuRenderer.Row("Follow", "", MenuRenderer.TargetKind.OTHER));
-		SubmenuPrototypeProbe probe = new SubmenuPrototypeProbe();
-		for (int i = 0; i < 30; i++)
-		{
-			benchmarkFrame(pixels, width, height, root, child, themed, renderer, config,
-				theme, rootRows, childRows, rootBounds, childBounds, region, probe);
-		}
-		long nativeStart = System.nanoTime();
-		for (int i = 0; i < 100; i++)
-		{
-			paint(pixels, width, height, root, child);
-		}
-		long fakeNative = System.nanoTime() - nativeStart;
-		long rootOnlyStart = System.nanoTime();
-		for (int i = 0; i < 100; i++)
-		{
-			Graphics2D g = themed.createGraphics();
-			try
-			{
-				g.translate(-region.x, -region.y);
-				renderer.render(g, null, theme, config, rootRows, rootBounds, -1, 0);
-			}
-			finally
-			{
-				g.dispose();
-			}
-		}
-		long rootOnly = System.nanoTime() - rootOnlyStart;
-		long complete = 0;
-		long probeNanos = 0;
-		long nativeDraw = 0;
-		for (int i = 0; i < 100; i++)
-		{
-			long start = System.nanoTime();
-			SubmenuPrototypeProbe.Result result = benchmarkFrame(pixels, width, height, root, child,
-				themed, renderer, config, theme, rootRows, childRows, rootBounds, childBounds, region, probe);
-			complete += System.nanoTime() - start;
-			probeNanos += result.nanoseconds;
-			nativeDraw += result.drawNanos;
-		}
-		System.out.printf("SYNTHETIC COMPLETE %dx%d fake-native=%.3fms root-only-theme=%.3fms prototype=%.3fms probe=%.3fms inner-draw=%.3fms snapshot=%.1fMiB reused%n",
-			width, height, fakeNative / 100_000_000.0, rootOnly / 100_000_000.0,
-			complete / 100_000_000.0, probeNanos / 100_000_000.0,
-			nativeDraw / 100_000_000.0, pixels.length * 4.0 / (1024 * 1024));
-	}
-
-	private static SubmenuPrototypeProbe.Result benchmarkFrame(int[] pixels, int width, int height,
-		StubMenu root, StubMenu child, BufferedImage themed, MenuRenderer renderer,
-		RightClickStylerConfig config, Theme theme, java.util.List<MenuRenderer.Row> rootRows,
-		java.util.List<MenuRenderer.Row> childRows, Rectangle rootBounds, Rectangle childBounds,
-		Rectangle region,
-		SubmenuPrototypeProbe probe)
-	{
-		SubmenuTree tree = SubmenuTree.capture(root);
-		SubmenuPrototypeProbe.Result result = probe.samplePixels(pixels, width, height, tree,
-			() -> paint(pixels, width, height, root, child));
-		if (result.state != SubmenuPrototypeProbe.State.ACTIVE)
-		{
-			throw new AssertionError("expected child: " + result.reason);
-		}
-		Graphics2D g = themed.createGraphics();
-		try
-		{
-			g.setComposite(java.awt.AlphaComposite.Clear);
-			g.fillRect(0, 0, region.width, region.height);
-			g.setComposite(java.awt.AlphaComposite.SrcOver);
-			g.translate(-region.x, -region.y);
-			renderer.render(g, null, theme, config, rootRows, rootBounds, -1, 0);
-			renderer.render(g, null, theme, config, childRows, childBounds, -1, 0, "Options");
-		}
-		finally
-		{
-			g.dispose();
-		}
-		return result;
 	}
 
 	private static final class StubMenu implements Menu

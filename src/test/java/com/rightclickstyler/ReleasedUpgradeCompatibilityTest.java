@@ -506,28 +506,28 @@ public class ReleasedUpgradeCompatibilityTest
 	{
 		RuneLiteProfileStore store = RuneLiteProfileStore.released("main", "alt");
 		ThemeManager manager = store.themeManager();
-		PrototypeImageCache.Key base = cacheKey(manager, store);
-		assertEquals(PrototypeImageCache.Miss.HIT, cacheKey(manager, store).difference(base));
+		SubmenuImageCache.Key base = cacheKey(manager, store);
+		assertEquals(SubmenuImageCache.Miss.HIT, cacheKey(manager, store).difference(base));
 
 		store.switchTo("alt");
 		manager.reload();
-		assertNotEquals(PrototypeImageCache.Miss.HIT, cacheKey(manager, store).difference(base));
+		assertNotEquals(SubmenuImageCache.Miss.HIT, cacheKey(manager, store).difference(base));
 		store.switchTo("main");
 		manager.reload();
 		assertEquals("a reload rebuilds the theme, so the image is redrawn",
-			PrototypeImageCache.Miss.THEME, cacheKey(manager, store).difference(base));
+			SubmenuImageCache.Miss.THEME, cacheKey(manager, store).difference(base));
 
-		PrototypeImageCache.Key reloaded = cacheKey(manager, store);
+		SubmenuImageCache.Key reloaded = cacheKey(manager, store);
 		RightClickStylerPanel.resetTargetColourSettings(store::unset);
-		assertEquals(PrototypeImageCache.Miss.CONFIG, cacheKey(manager, store).difference(reloaded));
+		assertEquals(SubmenuImageCache.Miss.CONFIG, cacheKey(manager, store).difference(reloaded));
 
-		PrototypeImageCache.Key reset = cacheKey(manager, store);
+		SubmenuImageCache.Key reset = cacheKey(manager, store);
 		store.set(RightClickStylerConfig.KEY_ITEM_COLOUR, new Color(0x010203));
-		assertEquals(PrototypeImageCache.Miss.CONFIG, cacheKey(manager, store).difference(reset));
+		assertEquals(SubmenuImageCache.Miss.CONFIG, cacheKey(manager, store).difference(reset));
 
-		PrototypeImageCache.Key coloured = cacheKey(manager, store);
+		SubmenuImageCache.Key coloured = cacheKey(manager, store);
 		manager.setWorking(manager.effectiveTheme().withHoverOpacity(manager.effectiveTheme().hoverOpacity - 1));
-		assertEquals(PrototypeImageCache.Miss.THEME, cacheKey(manager, store).difference(coloured));
+		assertEquals(SubmenuImageCache.Miss.THEME, cacheKey(manager, store).difference(coloured));
 	}
 
 	// ---- Stage 5: reset actions ----
@@ -609,14 +609,14 @@ public class ReleasedUpgradeCompatibilityTest
 
 	// ---- helpers ----
 
-	private static PrototypeImageCache.Key cacheKey(ThemeManager manager, RuneLiteProfileStore store)
+	private static SubmenuImageCache.Key cacheKey(ThemeManager manager, RuneLiteProfileStore store)
 	{
 		List<MenuRenderer.Row> rows = Collections.singletonList(
 			new MenuRenderer.Row("Teleport", "<col=ff9040>Drakan's medallion", MenuRenderer.TargetKind.ITEM));
-		PrototypeImageCache.Menu menu = PrototypeImageCache.menu(new Rectangle(10, 10, 150, 34),
+		SubmenuImageCache.Menu menu = SubmenuImageCache.menu(new Rectangle(10, 10, 150, 34),
 			"Choose Option", 0, -1, rows);
-		return PrototypeImageCache.capture(manager.effectiveTheme(), store.config(), null, 90,
-			new Rectangle(0, 0, 300, 200), new PrototypeImageCache.Menu[]{menu});
+		return SubmenuImageCache.capture(manager.effectiveTheme(), store.config(), null, 90,
+			new Rectangle(0, 0, 300, 200), new SubmenuImageCache.Menu[]{menu});
 	}
 
 	private static List<String> fieldsWithHoverOpacity()

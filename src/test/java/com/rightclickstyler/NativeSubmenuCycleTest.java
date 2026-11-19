@@ -42,33 +42,28 @@ import static org.junit.Assume.assumeTrue;
  * between any two client calls of a single frame, including during the native probe draw.
  *
  * <p>Every test runs twice through the real {@code BeforeMenuRender} handler and overlay: with
- * the previous resolver authoritative (the default) and with exact coverage authoritative.
+ * the image cache off and on.
  */
 @RunWith(Parameterized.class)
 public class NativeSubmenuCycleTest
 {
-	/**
-	 * The previous resolver, exact coverage authoritative, and exact coverage with the image
-	 * cache. The cached mode re-renders every reused image and fails on any pixel difference.
-	 */
-	@Parameters(name = "exactAuthoritative={0},imageCache={1}")
+	/** The cached mode re-renders every reused image and fails on any pixel difference. */
+	@Parameters(name = "imageCache={0}")
 	public static Collection<Object[]> modes()
 	{
-		return Arrays.asList(new Object[]{false, false}, new Object[]{true, false}, new Object[]{true, true});
+		return Arrays.asList(new Object[]{false}, new Object[]{true});
 	}
 
-	private final boolean authoritative;
 	private final boolean imageCache;
 
-	public NativeSubmenuCycleTest(boolean authoritative, boolean imageCache)
+	public NativeSubmenuCycleTest(boolean imageCache)
 	{
-		this.authoritative = authoritative;
 		this.imageCache = imageCache;
 	}
 
 	private Harness harness(NativeModel model) throws Exception
 	{
-		return new Harness(model, authoritative, imageCache ? 1 : -1);
+		return new Harness(model, imageCache ? 1 : -1);
 	}
 
 	private static final int CANVAS_WIDTH = 990;
@@ -78,7 +73,7 @@ public class NativeSubmenuCycleTest
 	private static final int GRAY = 0xFF808080;
 
 	@Test
-	public void scrollablePlayerMenuWithoutChildrenUsesPrototypePath() throws Exception
+	public void scrollablePlayerMenuWithoutChildrenUsesSubmenuPath() throws Exception
 	{
 		NativeModel model = new NativeModel(434, 0, 212, 76, true, 0, entry -> false);
 		model.live = new Point(500, 80);
@@ -91,7 +86,7 @@ public class NativeSubmenuCycleTest
 	}
 
 	@Test
-	public void condensedPlayerMenuWithSiblingChildrenUsesPrototypePath() throws Exception
+	public void condensedPlayerMenuWithSiblingChildrenUsesSubmenuPath() throws Exception
 	{
 		NativeModel model = new NativeModel(434, 130, 212, 4, false, 0, entry -> entry > 0);
 		for (int i = 1; i < 4; i++)
@@ -204,8 +199,8 @@ public class NativeSubmenuCycleTest
 		assertTrue("scenario must exercise many frames: " + frames, frames > 60);
 		assertTrue("native state must switch children: " + model.openChanges, model.openChanges >= 4);
 		assertTrue("closed children must keep stale rectangles", model.retainedCount() >= 3);
-		assertEquals(0L, field(harness.overlay, "prototypeChangedDrops"));
-		assertEquals(0L, field(harness.overlay, "prototypeClosedDrops"));
+		assertEquals(0L, field(harness.overlay, "submenuChangedDrops"));
+		assertEquals(0L, field(harness.overlay, "submenuClosedDrops"));
 	}
 
 	private static List<Point> racingPath()
@@ -226,53 +221,8 @@ public class NativeSubmenuCycleTest
 	}
 
 	@Test
-	public void shadowReuseNeverMismatchesWhileTheMouseRacesAcrossCycles() throws Exception
+	public void delayedOpenUnderAParkedMouseIsThemedEveryCycle() throws Exception
 	{
-		assumeTrue("shadow validation disabled", MenuOverlay.submenuShadowEnabled());
-		NativeModel model = longLoggedRoot(0);
-		List<Point> path = racingPath();
-		int[] step = {0};
-		model.live = path.get(0);
-		model.beforeEachClientCall = () ->
-		{
-			if (step[0] < path.size() - 1)
-			{
-				model.live = path.get(++step[0]);
-			}
-		};
-		Harness harness = harness(model);
-		int kinds = SubmenuChainShadow.Kind.values().length;
-		int verdicts = SubmenuChainShadow.Verdict.values().length;
-		int[][] counts = new int[kinds][verdicts];
-		int frames = 0;
-		while (step[0] < path.size() - 1)
-		{
-			if (frames % 2 == 0)
-			{
-				model.cycle();
-			}
-			Frame frame = harness.frame();
-			assertThemedNativeState("frame " + frames, frame, model); // rendering ignores the shadow
-			SubmenuChainShadow shadow = shadowOf(harness);
-			counts[shadow.lastDecision().kind.ordinal()][shadow.lastVerdict().ordinal()]++;
-			frames++;
-		}
-		int same = SubmenuChainShadow.Kind.REUSE_SAME_CYCLE.ordinal();
-		int settled = SubmenuChainShadow.Kind.REUSE_SETTLED.ordinal();
-		int match = SubmenuChainShadow.Verdict.MATCH.ordinal();
-		int mismatch = SubmenuChainShadow.Verdict.MISMATCH.ordinal();
-		int unverified = SubmenuChainShadow.Verdict.UNVERIFIED.ordinal();
-		String summary = java.util.Arrays.deepToString(counts);
-		assertEquals(summary, 0, counts[same][mismatch] + counts[settled][mismatch]);
-		assertEquals(summary, 0, counts[same][unverified] + counts[settled][unverified]);
-		assertTrue("same-cycle reuse is exercised: " + summary, counts[same][match] > 10);
-		assertTrue("settled reuse is exercised: " + summary, counts[settled][match] > 10);
-	}
-
-	@Test
-	public void delayedOpenUnderAParkedMouseIsNeverReused() throws Exception
-	{
-		assumeTrue("shadow validation disabled", MenuOverlay.submenuShadowEnabled());
 		NativeModel model = longLoggedRoot(0);
 		model.openLogged(15, 646, 225, 235);
 		model.live = new Point(549, 290); // row 18: native opens its child after the delay
@@ -281,121 +231,59 @@ public class NativeSubmenuCycleTest
 		for (int i = 0; i < 12; i++)
 		{
 			model.cycle();
-			Frame frame = harness.frame();
-			assertThemedNativeState("cycle " + i, frame, model);
-			SubmenuChainShadow.Decision decision = shadowOf(harness).lastDecision();
-			if (model.open != rowEighteen)
-			{
-				assertEquals("cycle " + i + " " + decision, SubmenuChainShadow.Kind.PROBE, decision.kind);
-				assertTrue("cycle " + i + " " + decision,
-					decision.reason == SubmenuChainShadow.ProbeReason.UNSETTLED
-						|| decision.reason == SubmenuChainShadow.ProbeReason.NO_PROOF);
-			}
-			assertFalse("cycle " + i, shadowOf(harness).lastVerdict() == SubmenuChainShadow.Verdict.MISMATCH);
+			assertThemedNativeState("cycle " + i, harness.frame(), model);
 		}
 		assertTrue("native opened row 18 while the mouse stayed still", model.open == rowEighteen);
 	}
 
 	@Test
-	public void nativeChangeWithinOneCycleIsReportedAsMismatch() throws Exception
+	public void nativeChangeWithinOneCycleIsThemedFromTheProbe() throws Exception
 	{
-		assumeTrue("shadow validation disabled", MenuOverlay.submenuShadowEnabled());
-		// Breaks hypothesis H1 on purpose: the shadow must catch it, rendering must not care.
 		NativeModel model = longLoggedRoot(0);
 		model.retain(12, 646, 180, 196);
 		model.openLogged(15, 646, 225, 235);
 		model.live = new Point(549, 250);
 		Harness harness = harness(model);
-		assertThemedNativeState("proof", harness.frame(), model);
+		assertThemedNativeState("before", harness.frame(), model);
 		model.open = model.childAtRow(12); // no cycle, no geometry change
-		Frame frame = harness.frame();
-		SubmenuChainShadow shadow = shadowOf(harness);
-		assertEquals(SubmenuChainShadow.Kind.REUSE_SAME_CYCLE, shadow.lastDecision().kind);
-		assertEquals(SubmenuChainShadow.Verdict.MISMATCH, shadow.lastVerdict());
-		assertThemedNativeState("rendering follows the probe, not the shadow", frame, model);
-		assertEquals(1L, ((long[][]) field(harness.overlay, "shadowVerdicts"))
-			[SubmenuChainShadow.Kind.REUSE_SAME_CYCLE.ordinal()][SubmenuChainShadow.Verdict.MISMATCH.ordinal()]);
+		assertThemedNativeState("rendering follows this frame's probe", harness.frame(), model);
 	}
 
 	@Test
-	public void ambiguousProbeUnderReuseIsUnverifiedAndStaysNative() throws Exception
+	public void switchToAnIndistinguishableChildStaysNative() throws Exception
 	{
-		assumeTrue("shadow validation disabled", MenuOverlay.submenuShadowEnabled());
 		NativeModel model = longLoggedRoot(0);
 		model.retain(20, 646, 400, 220);
 		model.retain(21, 646, 400, 220); // identical rectangles: indistinguishable by pixels
 		model.openLogged(15, 646, 225, 235);
 		model.live = new Point(549, 250);
 		Harness harness = harness(model);
-		assertThemedNativeState("proof", harness.frame(), model);
+		assertThemedNativeState("before", harness.frame(), model);
 		model.open = model.childAtRow(20);
-		Frame frame = harness.frame();
-		SubmenuChainShadow shadow = shadowOf(harness);
-		assertEquals(SubmenuChainShadow.Kind.REUSE_SAME_CYCLE, shadow.lastDecision().kind);
-		assertEquals("an ambiguous probe is not proof of correctness",
-			SubmenuChainShadow.Verdict.UNVERIFIED, shadow.lastVerdict());
-		assertEquals("the reused chain is never rendered", Shown.NATIVE, frame.shown);
+		assertEquals("the previous frame's chain is never rendered", Shown.NATIVE, harness.frame().shown);
 	}
 
 	@Test
-	public void menuOpeningAndUnpreparedEventsEndTheProof() throws Exception
+	public void menuOpeningConsumedEventsScrollAndStructureChangesStayThemed() throws Exception
 	{
-		assumeTrue("shadow validation disabled", MenuOverlay.submenuShadowEnabled());
 		NativeModel model = longLoggedRoot(0);
 		model.openLogged(15, 646, 225, 235);
 		model.live = new Point(549, 250);
 		Harness harness = harness(model);
-		harness.frame();
-		assertTrue(shadowOf(harness).hasProof());
+		assertThemedNativeState("first", harness.frame(), model);
 		harness.plugin.onMenuOpened(null); // RuneLite reuses the same root object
-		assertFalse(shadowOf(harness).hasProof());
-		harness.frame();
-		assertEquals(SubmenuChainShadow.ProbeReason.NO_PROOF, shadowOf(harness).lastDecision().reason);
-		assertTrue(shadowOf(harness).hasProof());
+		assertThemedNativeState("after the menu reopened", harness.frame(), model);
 		BeforeMenuRender consumed = new BeforeMenuRender();
 		consumed.consume();
-		harness.plugin.handleSubmenuPrototype(consumed);
-		assertFalse("a frame another subscriber consumed proves nothing", shadowOf(harness).hasProof());
-		harness.frame();
+		assertTrue(harness.plugin.handleSubmenuFrame(consumed));
+		assertThemedNativeState("after another subscriber consumed a frame", harness.frame(), model);
 		model.scroll = 1;
-		harness.frame();
-		assertEquals(String.valueOf(shadowOf(harness).lastDecision()), SubmenuChainShadow.ProbeReason.SCROLL, shadowOf(harness).lastDecision().reason);
-		harness.frame();
+		assertThemedNativeState("after scrolling", harness.frame(), model);
 		model.rootEntryOptions[40] = "Changed";
-		harness.frame();
-		assertEquals(SubmenuChainShadow.ProbeReason.STRUCTURE, shadowOf(harness).lastDecision().reason);
+		assertThemedNativeState("after an entry changed", harness.frame(), model);
 	}
 
-	@Test
-	public void exactCoverageComparisonIsShadowOnly() throws Exception
-	{
-		assumeTrue("exact-coverage shadow disabled", SubmenuPrototypeProbe.exactCoverageShadowEnabled());
-		assumeTrue("previous resolver authoritative", !authoritative);
-		NativeModel model = longLoggedRoot(0);
-		model.retain(12, 646, 180, 196);
-		model.openLogged(15, 646, 225, 235);
-		model.live = new Point(549, 250);
-		Harness harness = harness(model);
-		assertThemedNativeState("exclusive evidence", harness.frame(), model);
-		assertEquals(MenuOverlay.ExactComparison.AGREE, field(harness.overlay, "lastExactComparison"));
-
-		// Logged frame 587's near-tie widths at one position: the probe's own resolver is
-		// ambiguous, the exact reading picks the drawn width, and the frame still stays native.
-		NativeModel tie = longLoggedRoot(0);
-		tie.retain(20, 646, 400, 235);
-		tie.retain(22, 646, 400, 231);
-		tie.openLogged(21, 646, 400, 232);
-		tie.live = new Point(549, 340);
-		Harness tieHarness = harness(tie);
-		Frame frame = tieHarness.frame();
-		assertEquals("the exact reading never reaches rendering", Shown.NATIVE, frame.shown);
-		assertEquals(MenuOverlay.ExactComparison.OLD_AMBIGUOUS_NEW_RESOLVED, field(tieHarness.overlay, "lastExactComparison"));
-		long[] comparisons = (long[]) field(tieHarness.overlay, "exactComparisons");
-		assertEquals("unverified, never counted as agreement", 0L, comparisons[MenuOverlay.ExactComparison.AGREE.ordinal()]);
-		assertEquals(1L, comparisons[MenuOverlay.ExactComparison.OLD_AMBIGUOUS_NEW_RESOLVED.ordinal()]);
-	}
-
-	// ---- Exact coverage as the authoritative resolver (each test runs in both modes) ----
+	// ---- Exact coverage resolution ----
 
 	/** Logged frame 587's near-tie widths at one position, with the middle width open. */
 	private static NativeModel nearTieModel()
@@ -414,93 +302,21 @@ public class NativeSubmenuCycleTest
 	}
 
 	@Test
-	public void nearTieSiblingsAreThemedOnlyWhenExactCoverageIsAuthoritative() throws Exception
+	public void nearTieSiblingsAreThemedByExactCoverage() throws Exception
 	{
 		Harness harness = harness(nearTieModel());
 		Frame frame = harness.frame();
 		assertEquals(MenuOverlay.ExactComparison.OLD_AMBIGUOUS_NEW_RESOLVED, comparison(harness));
-		if (authoritative)
-		{
-			assertThemedNativeState("promoted near tie", frame, harness.model);
-			assertEquals(1L, outcome(harness, MenuOverlay.PrototypeOutcome.READY_WITH_CHILD));
-			assertEquals(1L, field(harness.overlay, "prototypeBlits"));
-		}
-		else
-		{
-			assertEquals("the previous resolver is ambiguous and stays native", Shown.NATIVE, frame.shown);
-			assertEquals(1L, outcome(harness, MenuOverlay.PrototypeOutcome.FALLBACK_AMBIGUOUS));
-		}
+		assertThemedNativeState("promoted near tie", frame, harness.model);
+		assertEquals(1L, outcome(harness, MenuOverlay.SubmenuOutcome.READY_WITH_CHILD));
+		assertEquals(1L, field(harness.overlay, "submenuBlits"));
 
 		// Retained 63px below its parent row: the existing detached-child check applies, and the
 		// exact reading is the proof that native drew the child at that position.
 		Harness detached = harness(nearTieModel(400));
 		Frame detachedFrame = detached.frame();
-		if (authoritative)
-		{
-			assertThemedNativeState("detached near tie", detachedFrame, detached.model);
-			assertEquals(1L, outcome(detached, MenuOverlay.PrototypeOutcome.READY_WITH_NATIVE_DETACHED_CHILD));
-		}
-		else
-		{
-			assertEquals(Shown.NATIVE, detachedFrame.shown);
-		}
-	}
-
-	@Test
-	public void everyPromotedResolutionRecordsCompactEvidence() throws Exception
-	{
-		Harness harness = harness(nearTieModel());
-		harness.frame();
-		BoundedEvidenceLog evidence = (BoundedEvidenceLog) field(harness.overlay, "exactEvidence");
-		List<String> records = new ArrayList<>();
-		evidence.drain(records::add);
-		if (!authoritative && !Boolean.getBoolean("rightclickstyler.submenuTrace"))
-		{
-			assertEquals("shadow mode without the trace keeps its sampled detail log", 0, records.size());
-			return;
-		}
-		assertEquals(1, records.size());
-		String record = records.get(0);
-		assertTrue(record, record.contains("comparison=OLD_AMBIGUOUS_NEW_RESOLVED"));
-		assertTrue(record, record.contains("exact=RESOLVED"));
-		assertTrue(record, record.contains("explaining=1"));
-		assertTrue("the selected chain with its bounds: " + record, record.matches(".*exactChain=\\[\\d+=646,300,232x97\\].*"));
-		assertTrue("the competing covered candidates: " + record, record.matches(".*covered=\\[\\d+=646,300,231x97 \\d+=646,300,232x97\\].*"));
-		assertTrue(record, record.contains("probe=AMBIGUOUS"));
-		assertTrue(record, record.contains(authoritative
-			? "outcome=READY_WITH_CHILD rendered=[" : "outcome=FALLBACK_AMBIGUOUS rendered=none"));
-	}
-
-	@Test
-	public void evidenceIsStreamedOnEveryTickAndNeverSilentlyLost() throws Exception
-	{
-		assumeTrue("the evidence stream is on in authoritative mode", authoritative);
-		Harness harness = harness(nearTieModel());
-		for (int tick = 0; tick < 5; tick++)
-		{
-			for (int frame = 0; frame < 7; frame++)
-			{
-				harness.frame();
-			}
-			harness.overlay.reportPrototype(); // one game tick, inside the 5s summary window
-			assertEquals("tick " + tick, 7L * (tick + 1), field(harness.overlay, "exactEvidenceEmitted"));
-		}
-		assertEquals(35L, field(harness.overlay, "exactEvidenceRecorded"));
-		assertEquals(0L, field(harness.overlay, "exactEvidenceDropped"));
-
-		// Without ticks the queue fills; the overflow is counted and reported, not silent.
-		// (A small queue keeps the shared test log short.)
-		BoundedEvidenceLog small = new BoundedEvidenceLog(4);
-		setField(harness.overlay, "exactEvidence", small);
-		for (int frame = 0; frame < 7; frame++)
-		{
-			harness.frame();
-		}
-		assertEquals(4, small.size());
-		harness.overlay.reportPrototype();
-		assertEquals(3L, field(harness.overlay, "exactEvidenceDropped"));
-		assertEquals(35L + 4, field(harness.overlay, "exactEvidenceEmitted"));
-		assertEquals(0, small.size());
+		assertThemedNativeState("detached near tie", detachedFrame, detached.model);
+		assertEquals(1L, outcome(detached, MenuOverlay.SubmenuOutcome.READY_WITH_NATIVE_DETACHED_CHILD));
 	}
 
 	@Test
@@ -514,7 +330,7 @@ public class NativeSubmenuCycleTest
 		Frame frame = harness.frame();
 		assertEquals(Shown.NATIVE, frame.shown);
 		assertEquals(MenuOverlay.ExactComparison.BOTH_UNRESOLVED, comparison(harness));
-		assertEquals(1L, outcome(harness, MenuOverlay.PrototypeOutcome.FALLBACK_AMBIGUOUS));
+		assertEquals(1L, outcome(harness, MenuOverlay.SubmenuOutcome.FALLBACK_AMBIGUOUS));
 	}
 
 	@Test
@@ -536,14 +352,7 @@ public class NativeSubmenuCycleTest
 			model.live = new Point(549, 22 + 15 * (14 + open) + 5);
 			Frame frame = harness(model).frame();
 			String context = "open width " + widths[open];
-			if (authoritative)
-			{
-				assertThemedNativeState(context, frame, model);
-			}
-			else
-			{
-				assertNeverWrong(context, frame, model);
-			}
+			assertThemedNativeState(context, frame, model);
 		}
 	}
 
@@ -567,14 +376,7 @@ public class NativeSubmenuCycleTest
 			model.openGrandchild = wideOpen ? wide : narrow;
 			Frame frame = harness(model).frame();
 			String context = (wideOpen ? "180px" : "176px") + " grandchild open";
-			if (authoritative)
-			{
-				assertThemedNativeState(context, frame, model);
-			}
-			else
-			{
-				assertNeverWrong(context, frame, model);
-			}
+			assertThemedNativeState(context, frame, model);
 		}
 		NativeModel childOnly = nestedModel();
 		childOnly.nest(2, 0, 512, 30, 180, 97);
@@ -589,15 +391,8 @@ public class NativeSubmenuCycleTest
 		model.openGrandchild = model.nest(2, 0, 330, 40, 150, 60); // entirely under its parent
 		Harness harness = harness(model);
 		Frame frame = harness.frame();
-		if (authoritative)
-		{
-			assertEquals("contained: drawn or not, the pixels are identical", Shown.NATIVE, frame.shown);
-			assertEquals(1L, outcome(harness, MenuOverlay.PrototypeOutcome.FALLBACK_AMBIGUOUS));
-		}
-		else
-		{
-			assertNeverWrong("contained grandchild", frame, model);
-		}
+		assertEquals("contained: drawn or not, the pixels are identical", Shown.NATIVE, frame.shown);
+		assertEquals(1L, outcome(harness, MenuOverlay.SubmenuOutcome.FALLBACK_AMBIGUOUS));
 	}
 
 	/** The long root moved to x=700, so children open at x=912 and are clipped at 990. */
@@ -623,14 +418,7 @@ public class NativeSubmenuCycleTest
 		visible.openLogged(21, 912, 300, 60); // ends at x=972, inside the canvas
 		visible.live = new Point(800, 340);
 		Frame visibleFrame = harness(visible).frame();
-		if (authoritative)
-		{
-			assertThemedNativeState("visible clipped difference", visibleFrame, visible);
-		}
-		else
-		{
-			assertNeverWrong("visible clipped difference", visibleFrame, visible);
-		}
+		assertThemedNativeState("visible clipped difference", visibleFrame, visible);
 	}
 
 	@Test
@@ -644,15 +432,8 @@ public class NativeSubmenuCycleTest
 		Harness harness = harness(model);
 		Frame frame = harness.frame();
 		assertEquals(MenuOverlay.ExactComparison.OLD_RESOLVED_NEW_UNRESOLVED, comparison(harness));
-		if (authoritative)
-		{
-			assertEquals("evidence against full coverage stays native", Shown.NATIVE, frame.shown);
-			assertEquals(1L, outcome(harness, MenuOverlay.PrototypeOutcome.FALLBACK_EXACT_UNRESOLVED));
-		}
-		else
-		{
-			assertThemedNativeState("the previous resolver is unchanged", frame, model);
-		}
+		assertEquals("evidence against full coverage stays native", Shown.NATIVE, frame.shown);
+		assertEquals(1L, outcome(harness, MenuOverlay.SubmenuOutcome.FALLBACK_EXACT_UNRESOLVED));
 	}
 
 	@Test
@@ -666,10 +447,7 @@ public class NativeSubmenuCycleTest
 		Harness harness = harness(model);
 		Frame frame = harness.frame();
 		assertEquals(Shown.NATIVE, frame.shown);
-		if (authoritative)
-		{
-			assertEquals(1L, outcome(harness, MenuOverlay.PrototypeOutcome.FALLBACK_EXACT_UNRESOLVED));
-		}
+		assertEquals(1L, outcome(harness, MenuOverlay.SubmenuOutcome.FALLBACK_EXACT_UNRESOLVED));
 	}
 
 	@Test
@@ -684,7 +462,7 @@ public class NativeSubmenuCycleTest
 		Frame frame = harness.frame();
 		assertEquals(Shown.NATIVE, frame.shown);
 		assertEquals("one re-probe, then native", 2, frame.nativeDraws);
-		assertEquals(1L, outcome(harness, MenuOverlay.PrototypeOutcome.FALLBACK_GEOMETRY_CHANGED));
+		assertEquals(1L, outcome(harness, MenuOverlay.SubmenuOutcome.FALLBACK_GEOMETRY_CHANGED));
 		assertEquals("evidence from a changed frame is never used", MenuOverlay.ExactComparison.OLD_FAILED,
 			comparison(harness));
 	}
@@ -699,7 +477,7 @@ public class NativeSubmenuCycleTest
 		Harness harness = harness(model);
 		Frame frame = harness.frame();
 		assertEquals(Shown.NATIVE, frame.shown);
-		assertEquals(1L, outcome(harness, MenuOverlay.PrototypeOutcome.FALLBACK_BUFFER_MISMATCH));
+		assertEquals(1L, outcome(harness, MenuOverlay.SubmenuOutcome.FALLBACK_BUFFER_MISMATCH));
 	}
 
 	@Test
@@ -711,59 +489,35 @@ public class NativeSubmenuCycleTest
 		ExactCoverageResolverTest.Fixture f = new ExactCoverageResolverTest.Fixture(100, 4);
 		f.child(0).setBounds(328, 100, 220, 97);
 		f.child(1).setBounds(328, 300, 220, 97);
-		SubmenuPrototypeProbe.Result result = f.probe(ExactCoverageResolverTest.Paint.OPAQUE, f.child(1));
+		NativeSubmenuProbe.Result result = f.probe(ExactCoverageResolverTest.Paint.OPAQUE, f.child(1));
 		assertArrayEquals(new int[]{1}, result.activeChain);
 		result.exact = new ExactCoverageResolver.Outcome(ExactCoverageResolver.State.RESOLVED,
 			new int[]{0}, 1, new int[]{0}, result.exact.changedPixels);
 		SubmenuTree tree = SubmenuTree.capture(f.root);
 		assertEquals(MenuOverlay.ExactComparison.CONTRADICTORY, MenuOverlay.classifyExact(result));
-		assertEquals(MenuOverlay.PrototypeOutcome.FALLBACK_EXACT_CONTRADICTION,
+		assertEquals(MenuOverlay.SubmenuOutcome.FALLBACK_EXACT_CONTRADICTION,
 			MenuOverlay.authoritativeRejection(result, tree));
 
 		Harness harness = harness(longLoggedRoot(0));
 		java.lang.reflect.Method record = MenuOverlay.class.getDeclaredMethod("exactRecord",
-			SubmenuPrototypeProbe.Result.class, SubmenuTree.class, MenuOverlay.ExactComparison.class, boolean.class);
+			NativeSubmenuProbe.Result.class, SubmenuTree.class, MenuOverlay.ExactComparison.class);
 		record.setAccessible(true);
 		for (int i = 0; i < 25; i++)
 		{
-			record.invoke(harness.overlay, result, tree, MenuOverlay.ExactComparison.CONTRADICTORY, authoritative);
+			record.invoke(harness.overlay, result, tree, MenuOverlay.ExactComparison.CONTRADICTORY);
 		}
 		assertEquals(25L, ((long[]) field(harness.overlay, "exactComparisons"))
 			[MenuOverlay.ExactComparison.CONTRADICTORY.ordinal()]);
 		assertEquals("logged prominently up to the window limit", 25L, field(harness.overlay, "exactContradictionLogs"));
 		assertEquals("then counted, never silent", 5L, field(harness.overlay, "exactContradictionSuppressed"));
-		assertFalse((boolean) field(harness.overlay, "exactDiagnosticsFailed"));
-	}
-
-	@Test
-	public void exactDiagnosticFailureNeverInterruptsRendering() throws Exception
-	{
-		Harness harness = harness(nearTieModel());
-		setField(harness.overlay, "exactComparisons", new long[0]); // every record now throws
-		for (int i = 0; i < 3; i++)
-		{
-			Frame frame = harness.frame();
-			if (authoritative)
-			{
-				assertThemedNativeState("frame " + i, frame, harness.model);
-			}
-			else
-			{
-				assertEquals(Shown.NATIVE, frame.shown);
-			}
-			assertEquals("the decision does not depend on bookkeeping",
-				MenuOverlay.ExactComparison.OLD_AMBIGUOUS_NEW_RESOLVED, comparison(harness));
-		}
-		assertTrue((boolean) field(harness.overlay, "exactDiagnosticsFailed"));
-		harness.overlay.reportPrototype();
 	}
 
 	/** Scrolls the long root up and down under a parked pointer, one row every three frames. */
-	private ScrollRun longScroll(boolean authority, int sweeps) throws Exception
+	private ScrollRun longScroll(int sweeps) throws Exception
 	{
 		NativeModel model = longLoggedRoot(0);
 		model.live = new Point(549, 330); // root row 20 + scroll: native keeps opening there
-		Harness harness = new Harness(model, authority, authority == authoritative && imageCache ? 1 : -1);
+		Harness harness = harness(model);
 		ScrollRun run = new ScrollRun();
 		List<Integer> wave = new ArrayList<>();
 		for (int sweep = 0; sweep < sweeps; sweep++)
@@ -784,7 +538,7 @@ public class NativeSubmenuCycleTest
 			{
 				model.cycle();
 				Frame frame = harness.frame();
-				String context = (authority ? "authoritative" : "shadow") + " frame " + run.frames
+				String context = "frame " + run.frames
 					+ " scroll=" + scroll + " open=" + model.openBounds();
 				assertNeverWrong(context, frame, model);
 				assertEquals(context + ": one native probe draw", 1, frame.nativeDraws);
@@ -797,29 +551,19 @@ public class NativeSubmenuCycleTest
 				else
 				{
 					run.fallbacks++;
-					MenuOverlay.PrototypeOutcome outcome =
-						(MenuOverlay.PrototypeOutcome) field(harness.overlay, "lastOutcome");
+					MenuOverlay.SubmenuOutcome outcome =
+						(MenuOverlay.SubmenuOutcome) field(harness.overlay, "lastOutcome");
 					run.fallbackOutcomes.merge(outcome.name(), 1, Integer::sum);
-					if (authority)
-					{
-						assertTrue(context + ": native only when exact coverage did not resolve: "
-							+ outcome + " " + comparison,
-							outcome == MenuOverlay.PrototypeOutcome.FALLBACK_AMBIGUOUS
-								|| outcome == MenuOverlay.PrototypeOutcome.FALLBACK_EXACT_UNRESOLVED);
-					}
+					assertTrue(context + ": native only when exact coverage did not resolve: "
+						+ outcome + " " + comparison,
+						outcome == MenuOverlay.SubmenuOutcome.FALLBACK_AMBIGUOUS
+							|| outcome == MenuOverlay.SubmenuOutcome.FALLBACK_EXACT_UNRESOLVED);
 				}
-				if (++run.frames % 10 == 0)
-				{
-					harness.overlay.reportPrototype(); // a game tick roughly every 10 frames
-				}
+				run.frames++;
 			}
 		}
-		harness.overlay.reportPrototype();
 		run.openChanges = model.openChanges;
 		run.retained = model.retainedCount();
-		run.evidenceRecorded = (long) field(harness.overlay, "exactEvidenceRecorded");
-		run.evidenceEmitted = (long) field(harness.overlay, "exactEvidenceEmitted");
-		run.evidenceDropped = (long) field(harness.overlay, "exactEvidenceDropped");
 		return run;
 	}
 
@@ -830,9 +574,6 @@ public class NativeSubmenuCycleTest
 		private int fallbacks;
 		private int openChanges;
 		private int retained;
-		private long evidenceRecorded;
-		private long evidenceEmitted;
-		private long evidenceDropped;
 		private final int[] comparisons = new int[MenuOverlay.ExactComparison.values().length];
 		private final java.util.Map<String, Integer> fallbackOutcomes = new java.util.TreeMap<>();
 
@@ -846,7 +587,7 @@ public class NativeSubmenuCycleTest
 		{
 			StringBuilder text = new StringBuilder("frames=" + frames + " themed=" + themed + " native=" + fallbacks
 				+ " openChanges=" + openChanges + " retained=" + retained + " fallbacks=" + fallbackOutcomes
-				+ " evidence=" + evidenceRecorded + "/" + evidenceEmitted + "/" + evidenceDropped + " comparisons:");
+				+ " comparisons:");
 			for (MenuOverlay.ExactComparison comparison : MenuOverlay.ExactComparison.values())
 			{
 				text.append(' ').append(comparison).append('=').append(count(comparison));
@@ -858,40 +599,14 @@ public class NativeSubmenuCycleTest
 	@Test
 	public void longScrollingSessionNeverDrawsAnUnprovenChildOrBlanks() throws Exception
 	{
-		ScrollRun run = longScroll(authoritative, 3);
-		System.out.println("LONGSCROLL authoritative=" + authoritative + " " + run);
+		ScrollRun run = longScroll(3);
 		assertTrue("prolonged scrolling: " + run, run.frames > 600);
 		assertTrue("native keeps switching children: " + run, run.openChanges > 100);
 		assertTrue("many stale rectangles accumulate: " + run, run.retained > 30);
 		assertEquals("never contradictory: " + run, 0, run.count(MenuOverlay.ExactComparison.CONTRADICTORY));
-		assertEquals(run.toString(), 0L, run.evidenceDropped);
-		assertEquals("every recorded frame was emitted: " + run, run.evidenceRecorded, run.evidenceEmitted);
-		if (authoritative)
-		{
-			assertEquals("one record per promoted or withdrawn resolution: " + run,
-				run.count(MenuOverlay.ExactComparison.OLD_AMBIGUOUS_NEW_RESOLVED)
-					+ run.count(MenuOverlay.ExactComparison.OLD_RESOLVED_NEW_UNRESOLVED), run.evidenceRecorded);
-			assertEquals("every frame native fell back on was one exact coverage left unresolved: " + run,
-				run.count(MenuOverlay.ExactComparison.BOTH_UNRESOLVED)
-					+ run.count(MenuOverlay.ExactComparison.OLD_RESOLVED_NEW_UNRESOLVED), run.fallbacks);
-		}
-	}
-
-	@Test
-	public void authoritativeScrollingFallsBackLessThanThePreviousResolver() throws Exception
-	{
-		assumeTrue("compares both modes once", authoritative);
-		ScrollRun shadow = longScroll(false, 1);
-		ScrollRun exact = longScroll(true, 1);
-		System.out.println("LONGSCROLL compare shadow: " + shadow);
-		System.out.println("LONGSCROLL compare exact:  " + exact);
-		assertEquals("identical native sessions", shadow.frames, exact.frames);
-		assertEquals(shadow.openChanges, exact.openChanges);
-		assertArrayEquals("the same frames classified the same way", shadow.comparisons, exact.comparisons);
-		assertTrue(exact + " vs " + shadow, exact.themed > shadow.themed);
-		assertEquals("exact gains exactly its promoted frames and loses exactly its withdrawn ones",
-			shadow.themed + exact.count(MenuOverlay.ExactComparison.OLD_AMBIGUOUS_NEW_RESOLVED)
-				- exact.count(MenuOverlay.ExactComparison.OLD_RESOLVED_NEW_UNRESOLVED), exact.themed);
+		assertEquals("every frame native fell back on was one exact coverage left unresolved: " + run,
+			run.count(MenuOverlay.ExactComparison.BOTH_UNRESOLVED)
+				+ run.count(MenuOverlay.ExactComparison.OLD_RESOLVED_NEW_UNRESOLVED), run.fallbacks);
 	}
 
 	private static MenuOverlay.ExactComparison comparison(Harness harness) throws Exception
@@ -899,12 +614,12 @@ public class NativeSubmenuCycleTest
 		return (MenuOverlay.ExactComparison) field(harness.overlay, "lastExactComparison");
 	}
 
-	private static long outcome(Harness harness, MenuOverlay.PrototypeOutcome outcome) throws Exception
+	private static long outcome(Harness harness, MenuOverlay.SubmenuOutcome outcome) throws Exception
 	{
-		return ((long[]) field(harness.overlay, "prototypeOutcomes"))[outcome.ordinal()];
+		return ((long[]) field(harness.overlay, "submenuOutcomes"))[outcome.ordinal()];
 	}
 
-	// ---- Experimental image cache (cache-on mode only, except where noted) ----
+	// ---- Image cache (cache-on mode only, except where noted) ----
 
 	@Test
 	public void unchangedFramesReuseTheImage() throws Exception
@@ -917,12 +632,12 @@ public class NativeSubmenuCycleTest
 		Harness harness = harness(model);
 		Frame first = harness.frame();
 		assertThemedNativeState("first frame", first, model);
-		assertEquals(PrototypeImageCache.Miss.EMPTY, harness.lastMiss());
+		assertEquals(SubmenuImageCache.Miss.EMPTY, harness.lastMiss());
 		for (int i = 0; i < 10; i++)
 		{
 			Frame frame = harness.frame();
 			assertThemedNativeState("frame " + i, frame, model);
-			assertEquals("frame " + i, PrototypeImageCache.Miss.HIT, harness.lastMiss());
+			assertEquals("frame " + i, SubmenuImageCache.Miss.HIT, harness.lastMiss());
 			assertTrue("frame " + i + ": the reused image is the same picture", sameImage(first.output, frame.output));
 		}
 		assertEquals("every reused frame was verified against a fresh render", 10L,
@@ -944,48 +659,48 @@ public class NativeSubmenuCycleTest
 		model.retain(12, 646, 180, 196);
 		model.openLogged(15, 646, 225, 235);
 		model.live = new Point(549, 250); // root row 15
-		Harness uncached = new Harness(model, true, -1);
-		Harness cached = new Harness(model, true, 0); // unverified: only the key decides
+		Harness uncached = new Harness(model, -1);
+		Harness cached = new Harness(model, 0); // unverified: only the key decides
 		Object[][] script = {
-			{"first frame", PrototypeImageCache.Miss.EMPTY, (Step) (m, u, c) -> { }},
-			{"nothing changed", PrototypeImageCache.Miss.HIT, (Step) (m, u, c) -> { }},
-			{"mouse moves within the hovered row", PrototypeImageCache.Miss.HIT,
+			{"first frame", SubmenuImageCache.Miss.EMPTY, (Step) (m, u, c) -> { }},
+			{"nothing changed", SubmenuImageCache.Miss.HIT, (Step) (m, u, c) -> { }},
+			{"mouse moves within the hovered row", SubmenuImageCache.Miss.HIT,
 				(Step) (m, u, c) -> m.live = new Point(560, 252)},
-			{"mouse moves to the next root row", PrototypeImageCache.Miss.HOVER,
+			{"mouse moves to the next root row", SubmenuImageCache.Miss.HOVER,
 				(Step) (m, u, c) -> m.live = new Point(560, 266)},
-			{"mouse enters the open child", PrototypeImageCache.Miss.HOVER,
+			{"mouse enters the open child", SubmenuImageCache.Miss.HOVER,
 				(Step) (m, u, c) -> m.live = new Point(700, 260)},
-			{"mouse moves to another child row", PrototypeImageCache.Miss.HOVER,
+			{"mouse moves to another child row", SubmenuImageCache.Miss.HOVER,
 				(Step) (m, u, c) -> m.live = new Point(700, 290)},
-			{"an entry's text changes in place", PrototypeImageCache.Miss.ROWS,
+			{"an entry's text changes in place", SubmenuImageCache.Miss.ROWS,
 				(Step) (m, u, c) -> m.rootEntryOptions[60] = "Changed text"},
-			{"an entry gains a colour tag", PrototypeImageCache.Miss.ROWS,
+			{"an entry gains a colour tag", SubmenuImageCache.Miss.ROWS,
 				(Step) (m, u, c) -> m.rootEntryOptions[60] = "<col=ff0000>Changed text"},
-			{"the theme changes", PrototypeImageCache.Miss.THEME, (Step) (m, u, c) ->
+			{"the theme changes", SubmenuImageCache.Miss.THEME, (Step) (m, u, c) ->
 			{
 				Theme current = c.themes.effectiveTheme();
 				Theme other = c.themes.builtIns().stream().filter(t -> t != current).findFirst().get();
 				u.themes.setWorking(other);
 				c.themes.setWorking(other);
 			}},
-			{"a config option changes", PrototypeImageCache.Miss.CONFIG, (Step) (m, u, c) ->
+			{"a config option changes", SubmenuImageCache.Miss.CONFIG, (Step) (m, u, c) ->
 			{
 				u.config.showHitRows = true;
 				c.config.showHitRows = true;
 			}},
-			{"text offset changes", PrototypeImageCache.Miss.CONFIG, (Step) (m, u, c) ->
+			{"text offset changes", SubmenuImageCache.Miss.CONFIG, (Step) (m, u, c) ->
 			{
 				u.config.textOffsetX += 3;
 				c.config.textOffsetX += 3;
 			}},
-			{"mod icons finish loading", PrototypeImageCache.Miss.ICONS,
+			{"mod icons finish loading", SubmenuImageCache.Miss.ICONS,
 				(Step) (m, u, c) -> m.modIcons = new net.runelite.api.IndexedSprite[0]},
 			// A different region size reallocates the image, which empties the cache.
-			{"native switches child (different width)", PrototypeImageCache.Miss.EMPTY,
+			{"native switches child (different width)", SubmenuImageCache.Miss.EMPTY,
 				(Step) (m, u, c) -> m.openLogged(12, 646, 180, 196)},
-			{"the root scrolls", PrototypeImageCache.Miss.SCROLL, (Step) (m, u, c) -> m.scroll = 1},
-			{"the open child closes", PrototypeImageCache.Miss.EMPTY, (Step) (m, u, c) -> m.open = null},
-			{"settled again", PrototypeImageCache.Miss.HIT, (Step) (m, u, c) -> { }},
+			{"the root scrolls", SubmenuImageCache.Miss.SCROLL, (Step) (m, u, c) -> m.scroll = 1},
+			{"the open child closes", SubmenuImageCache.Miss.EMPTY, (Step) (m, u, c) -> m.open = null},
+			{"settled again", SubmenuImageCache.Miss.HIT, (Step) (m, u, c) -> { }},
 		};
 		for (Object[] step : script)
 		{
@@ -1012,8 +727,8 @@ public class NativeSubmenuCycleTest
 		model.openLogged(15, 646, 230, 220);
 		model.childAtRow(15).entries[0] = entry(new String[]{"Row fifteen's own entry"}, 0, null);
 		model.live = new Point(549, 252);
-		Harness uncached = new Harness(model, true, -1);
-		Harness cached = new Harness(model, true, 0);
+		Harness uncached = new Harness(model, -1);
+		Harness cached = new Harness(model, 0);
 		cached.frame();
 		uncached.frame();
 		model.open = model.childAtRow(14); // native switched; the rectangles are identical
@@ -1025,7 +740,7 @@ public class NativeSubmenuCycleTest
 		model.openLogged(14, 646, 230, 214);
 		expected = uncached.frame();
 		actual = cached.frame();
-		assertNotEquals(PrototypeImageCache.Miss.HIT, cached.lastMiss());
+		assertNotEquals(SubmenuImageCache.Miss.HIT, cached.lastMiss());
 		assertTrue(sameImage(expected.output, actual.output));
 	}
 
@@ -1039,19 +754,19 @@ public class NativeSubmenuCycleTest
 		Harness harness = harness(model);
 		assertThemedNativeState("first", harness.frame(), model);
 		assertThemedNativeState("cached", harness.frame(), model);
-		assertEquals(PrototypeImageCache.Miss.HIT, harness.lastMiss());
+		assertEquals(SubmenuImageCache.Miss.HIT, harness.lastMiss());
 		// The key cannot be read and the render then throws: native this frame.
 		harness.config.throwOnHighlights = 2;
 		harness.config.showHitRows = true;
 		Frame failed = harness.frame();
 		assertEquals(Shown.NATIVE, failed.shown);
-		assertEquals(PrototypeImageCache.Miss.UNCACHEABLE, harness.lastMiss());
-		assertEquals(1L, outcome(harness, MenuOverlay.PrototypeOutcome.FALLBACK_RENDER_EXCEPTION));
+		assertEquals(SubmenuImageCache.Miss.UNCACHEABLE, harness.lastMiss());
+		assertEquals(1L, outcome(harness, MenuOverlay.SubmenuOutcome.FALLBACK_RENDER_EXCEPTION));
 		// Back to the earlier inputs: the half-drawn image must not be reused.
 		harness.config.showHitRows = false;
 		Frame recovered = harness.frame();
 		assertThemedNativeState("recovered", recovered, model);
-		assertEquals(PrototypeImageCache.Miss.EMPTY, harness.lastMiss());
+		assertEquals(SubmenuImageCache.Miss.EMPTY, harness.lastMiss());
 	}
 
 	@Test
@@ -1061,18 +776,18 @@ public class NativeSubmenuCycleTest
 		NativeModel model = longLoggedRoot(0);
 		model.openLogged(15, 646, 225, 235);
 		model.live = new Point(549, 250);
-		Harness uncached = new Harness(model, true, -1);
-		Harness cached = new Harness(model, true, 1);
+		Harness uncached = new Harness(model, -1);
+		Harness cached = new Harness(model, 1);
 		cached.failOnVerifyMismatch = false; // this test provokes the mismatch on purpose
 		cached.frame();
 		// Simulate an input the key forgot: the buffered image no longer matches its inputs.
-		BufferedImage image = (BufferedImage) field(cached.overlay, "prototypeImage");
+		BufferedImage image = (BufferedImage) field(cached.overlay, "submenuImage");
 		image.setRGB(image.getWidth() / 2, image.getHeight() / 2, 0xFFFF00FF);
 		Frame expected = uncached.frame();
 		Frame actual = cached.frame();
 		assertEquals(1L, field(cached.overlay, "imageVerifyMismatchTotal"));
 		assertEquals("the key matched; verification then replaced the stale image",
-			PrototypeImageCache.Miss.HIT, cached.lastMiss());
+			SubmenuImageCache.Miss.HIT, cached.lastMiss());
 		assertThemedNativeState("verified frame", actual, model);
 		assertTrue("the stale picture was replaced before the blit", sameImage(expected.output, actual.output));
 	}
@@ -1090,187 +805,6 @@ public class NativeSubmenuCycleTest
 		assertEquals(null, harness.lastMiss());
 		long[] misses = (long[]) field(harness.overlay, "imageMisses");
 		assertEquals(0L, Arrays.stream(misses).sum());
-	}
-
-	// ---- Benchmark (skipped unless -Drightclickstyler.benchmark=true) ----
-
-	private interface Scenario
-	{
-		void setUp(NativeModel model);
-
-		/** Called before every measured frame. */
-		void step(NativeModel model, int frame);
-	}
-
-	@Test
-	public void benchmarkImageCache() throws Exception
-	{
-		assumeTrue(Boolean.getBoolean("rightclickstyler.benchmark"));
-		assumeTrue("run once", authoritative && imageCache);
-		Object[][] scenarios = {
-			{"root only, parked", (Scenario) new Scenario()
-			{
-				public void setUp(NativeModel m)
-				{
-					m.live = new Point(549, 172);
-				}
-
-				public void step(NativeModel m, int frame)
-				{
-				}
-			}},
-			{"root only, sweeping rows", (Scenario) new Scenario()
-			{
-				public void setUp(NativeModel m)
-				{
-					m.live = new Point(549, 30);
-				}
-
-				public void step(NativeModel m, int frame)
-				{
-					m.live = new Point(549, 30 + frame % 540); // 1px per frame: new row every 15 frames
-				}
-			}},
-			{"simple submenu, parked in child", (Scenario) new Scenario()
-			{
-				public void setUp(NativeModel m)
-				{
-					m.openLogged(15, 646, 225, 235);
-					m.live = new Point(700, 260);
-				}
-
-				public void step(NativeModel m, int frame)
-				{
-				}
-			}},
-			{"simple submenu, moving in child", (Scenario) new Scenario()
-			{
-				public void setUp(NativeModel m)
-				{
-					m.openLogged(15, 646, 225, 235);
-					m.live = new Point(700, 250);
-				}
-
-				public void step(NativeModel m, int frame)
-				{
-					m.live = new Point(700, 250 + frame % 70);
-				}
-			}},
-			{"submenu heavy, parked", (Scenario) new Scenario()
-			{
-				public void setUp(NativeModel m)
-				{
-					for (int row = 3; row < 37; row++)
-					{
-						m.retain(row, 646, Math.min(495, 15 * row), 190 + row * 7 % 60);
-					}
-					m.openLogged(20, 646, 300, 232);
-					m.live = new Point(549, 330);
-				}
-
-				public void step(NativeModel m, int frame)
-				{
-				}
-			}},
-			{"submenu heavy, scrolling", (Scenario) new Scenario()
-			{
-				public void setUp(NativeModel m)
-				{
-					m.live = new Point(549, 330);
-				}
-
-				public void step(NativeModel m, int frame)
-				{
-					int phase = frame / 3 % 76;
-					m.scroll = phase < 38 ? phase : 76 - phase;
-					m.cycle();
-				}
-			}},
-		};
-		StringBuilder report = new StringBuilder();
-		for (Object[] scenario : scenarios)
-		{
-			for (String themeId : new String[]{"classic", "midnight"})
-			for (boolean cache : new boolean[]{false, true})
-			{
-				for (int pass = 0; pass < 2; pass++) // the first pass warms the JIT
-				{
-					NativeModel model = longLoggedRoot(0);
-					Scenario s = (Scenario) scenario[1];
-					s.setUp(model);
-					Harness harness = new Harness(model, true, cache ? 0 : -1);
-					harness.themes.setWorking(BuiltInThemes.ALL.stream()
-						.filter(t -> t.id.equals(themeId)).findFirst().get());
-					PerfTrace perf = harness.overlay.enablePerfTrace();
-					for (int frame = 0; frame < 600; frame++)
-					{
-						s.step(model, frame);
-						harness.frame();
-					}
-					if (pass == 0)
-					{
-						continue;
-					}
-					long[] misses = (long[]) field(harness.overlay, "imageMisses");
-					long lookups = Arrays.stream(misses).sum();
-					report.append(String.format("BENCHCACHE %-34s %-8s cache=%-5s hitRate=%5.1f%% %s %s %s %s alloc%s%n",
-						scenario[0], themeId, cache, lookups == 0 ? 0 : 100.0 * misses[0] / lookups,
-						line("prepare", combined(perf)), line("probe", perf.samples(PerfTrace.Cost.PROBE)),
-						line("themeRender", perf.samples(PerfTrace.Cost.THEME_RENDER)),
-						line("themeHit", perf.samples(PerfTrace.Cost.THEME_CACHE_HIT)),
-						line("", perf.samples(PerfTrace.Cost.PREPARE_ALLOCATED_BYTES), 1)));
-				}
-			}
-		}
-		System.out.print(report);
-	}
-
-	private static PerfTrace.Samples combined(PerfTrace perf)
-	{
-		PerfTrace.Samples all = new PerfTrace.Samples();
-		for (PerfTrace.Cost cost : new PerfTrace.Cost[]{PerfTrace.Cost.PREPARE_ROOT_ONLY,
-			PerfTrace.Cost.PREPARE_WITH_CHILD, PerfTrace.Cost.PREPARE_FALLBACK})
-		{
-			for (long value : rawValues(perf.samples(cost)))
-			{
-				all.add(value);
-			}
-		}
-		return all;
-	}
-
-	private static long[] rawValues(PerfTrace.Samples samples)
-	{
-		try
-		{
-			long[] values = (long[]) field(samples, "values");
-			return Arrays.copyOf(values, samples.count());
-		}
-		catch (Exception e)
-		{
-			throw new AssertionError(e);
-		}
-	}
-
-	private static String line(String name, PerfTrace.Samples samples)
-	{
-		return line(name, samples, 1_000);
-	}
-
-	private static String line(String name, PerfTrace.Samples samples, int scale)
-	{
-		long[] p = samples.percentiles();
-		if (p.length == 0)
-		{
-			return name + "{-}";
-		}
-		return String.format("%s{n=%d p50=%d p90=%d p99=%d}", name, samples.count(),
-			p[0] / scale, p[1] / scale, p[2] / scale);
-	}
-
-	private static SubmenuChainShadow shadowOf(Harness harness) throws Exception
-	{
-		return (SubmenuChainShadow) field(harness.overlay, "shadow");
 	}
 
 	@Test
@@ -1302,19 +836,14 @@ public class NativeSubmenuCycleTest
 			Frame frame = harness.frame();
 			String context = "moved to " + moved;
 			assertThemedNativeState(context, frame, model);
-			assertEquals(context, 1L, field(harness.overlay, "prototypeBlits"));
-			assertEquals(context, 0L, field(harness.overlay, "prototypeChangedDrops"));
-			assertTraceComplete(context, harness.overlay);
+			assertEquals(context, 1L, field(harness.overlay, "submenuBlits"));
+			assertEquals(context, 0L, field(harness.overlay, "submenuChangedDrops"));
 		}
 	}
 
 	@Test
 	public void structuralChangeAfterConsumptionIsStillDropped() throws Exception
 	{
-		if (!MenuOverlay.hardenedLifecycle())
-		{
-			return; // The baseline A/B lifecycle performs no final validation.
-		}
 		NativeModel model = longLoggedRoot(0);
 		model.openLogged(15, 646, 225, 235);
 		model.live = new Point(549, 287);
@@ -1322,7 +851,7 @@ public class NativeSubmenuCycleTest
 		harness.afterPrepare = () -> model.rootEntryOptions[40] = "Changed";
 		Frame frame = harness.frame();
 		assertEquals("a consumed frame cannot fall back to native", Shown.BLANK, frame.shown);
-		assertEquals(1L, field(harness.overlay, "prototypeChangedDrops"));
+		assertEquals(1L, field(harness.overlay, "submenuChangedDrops"));
 		assertEquals(0, frame.renderReads);
 		assertEquals("the next frame must return to native drawing", Shown.NATIVE, harness.frame().shown);
 		assertEquals("native fallback persists after a consumed-frame failure", Shown.NATIVE, harness.frame().shown);
@@ -1392,7 +921,6 @@ public class NativeSubmenuCycleTest
 		Harness racedHarness = harness(raced);
 		Frame racedFrame = racedHarness.frame();
 		assertThemedNativeState(name, racedFrame, raced);
-		assertTraceComplete(name, racedHarness.overlay);
 
 		NativeModel still = factory.create();
 		still.live = sample;
@@ -1468,20 +996,6 @@ public class NativeSubmenuCycleTest
 					0, frame.output.getRGB(inside.getX(), inside.getY()) >>> 24);
 			}
 		}
-	}
-
-	private static void assertTraceComplete(String context, MenuOverlay overlay) throws Exception
-	{
-		if (!Boolean.getBoolean("rightclickstyler.submenuTrace"))
-		{
-			return;
-		}
-		Object trace = field(overlay, "currentFrameTrace");
-		assertTrue(context, (boolean) field(trace, "consumed"));
-		assertTrue(context, (boolean) field(trace, "blitted"));
-		assertTrue(context, (boolean) field(trace, "finalized"));
-		assertEquals(context, 1, field(trace, "nativeDraws"));
-		assertEquals(context, null, field(trace, "finalReason"));
 	}
 
 	/** A point well inside {@code rect}, clear of every drawn menu (nulls ignored) and theme shadows. */
@@ -1598,7 +1112,7 @@ public class NativeSubmenuCycleTest
 		private boolean failOnVerifyMismatch;
 
 		/** @param imageCacheVerify -1 cache off; 0 cache on unverified; n verify every nth hit */
-		private Harness(NativeModel model, boolean authoritative, int imageCacheVerify) throws Exception
+		private Harness(NativeModel model, int imageCacheVerify) throws Exception
 		{
 			this.model = model;
 			themes = new ThemeManager(() -> null, (key, value) -> { }, config, new Gson());
@@ -1606,7 +1120,6 @@ public class NativeSubmenuCycleTest
 				Client.class, RightClickStylerConfig.class, ThemeManager.class);
 			constructor.setAccessible(true);
 			overlay = constructor.newInstance(model.client, config, themes);
-			overlay.setExactCoverageAuthoritative(authoritative);
 			overlay.setImageCache(imageCacheVerify >= 0, Math.max(0, imageCacheVerify));
 			failOnVerifyMismatch = imageCacheVerify == 1;
 			setField(plugin, "client", model.client);
@@ -1616,11 +1129,11 @@ public class NativeSubmenuCycleTest
 		private Frame frame() throws Exception
 		{
 			int[] before = model.pixels.clone();
-			long blits = (long) field(overlay, "prototypeBlits");
+			long blits = (long) field(overlay, "submenuBlits");
 			int draws = model.nativeDraws;
 			int reads = model.liveReads;
 			BeforeMenuRender event = new BeforeMenuRender();
-			assertTrue("prototype owns submenu events", plugin.handleSubmenuPrototype(event));
+			assertTrue("the submenu path owns submenu events", plugin.handleSubmenuFrame(event));
 			int preparedReads = model.liveReads;
 			assertArrayEquals("the native probe restores the framebuffer", before, model.pixels);
 			afterPrepare.run();
@@ -1636,7 +1149,7 @@ public class NativeSubmenuCycleTest
 			}
 			Frame frame = new Frame();
 			frame.shown = !event.isConsumed() ? Shown.NATIVE
-				: (long) field(overlay, "prototypeBlits") > blits ? Shown.THEMED : Shown.BLANK;
+				: (long) field(overlay, "submenuBlits") > blits ? Shown.THEMED : Shown.BLANK;
 			frame.output = output;
 			frame.prepareReads = preparedReads - reads;
 			frame.renderReads = model.liveReads - preparedReads;
@@ -1649,9 +1162,9 @@ public class NativeSubmenuCycleTest
 			return frame;
 		}
 
-		private PrototypeImageCache.Miss lastMiss() throws Exception
+		private SubmenuImageCache.Miss lastMiss() throws Exception
 		{
-			return (PrototypeImageCache.Miss) field(overlay, "lastImageMiss");
+			return (SubmenuImageCache.Miss) field(overlay, "lastImageMiss");
 		}
 	}
 

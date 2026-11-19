@@ -18,7 +18,7 @@ import java.util.Objects;
  * submenu arrow. Contents are compared by value, never by menu or entry identity, and never by
  * hash, so no collision can reuse a wrong image.
  */
-final class PrototypeImageCache
+final class SubmenuImageCache
 {
 	/** Why an image could not be reused; {@link #HIT} when it was. */
 	enum Miss

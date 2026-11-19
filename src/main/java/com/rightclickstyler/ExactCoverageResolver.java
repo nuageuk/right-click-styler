@@ -4,10 +4,9 @@ import java.awt.Rectangle;
 import java.util.List;
 
 /**
- * Experimental exact-coverage reading of the native probe's pixel evidence. By default it is a
- * shadow and the probe's existing resolver decides every frame; under the opt-in
- * {@code rightclickstyler.exactCoverageAuthoritative} flag the overlay renders only a chain this
- * reader RESOLVED, and the existing resolver becomes the shadow comparator.
+ * Exact-coverage reading of the native probe's pixel evidence. The overlay renders only a chain
+ * this reader RESOLVED; the probe's own resolver is a cross-check, and a frame where the two
+ * prove different chains stays native.
  *
  * <p>It reads the pixels the probe marked with sentinels, after the native draw and before the
  * restore, and never draws or writes the framebuffer. It relies on two properties of the native
@@ -44,7 +43,6 @@ final class ExactCoverageResolver
 		final int fullyCovered;
 		/** Evidence only: the fully covered candidate indexes, ascending. Never used to decide. */
 		final int[] covered;
-		long nanos;
 		final int changedPixels;
 
 		Outcome(State state, int[] chain, int explainingChains, int[] covered, int changedPixels)
@@ -69,29 +67,7 @@ final class ExactCoverageResolver
 	private static final byte COLLECTED = 2;
 	private byte[] mask = new byte[0];
 	private int[] changed = new int[0];
-
-	private long lastScanned;
-	private long lastCleared;
-	private boolean rowClip;
 	private final int[] segments = new int[4];
-
-	/** Probe level 3: scan coverage by row segments outside the root rather than per-pixel tests. */
-	void rowClip(boolean enabled)
-	{
-		rowClip = enabled;
-	}
-
-	/** Diagnostic: positions the last resolve's mask clear visited. */
-	long lastCleared()
-	{
-		return lastCleared;
-	}
-
-	/** Diagnostic: pixels the last resolve's coverage scan visited. */
-	long lastScanned()
-	{
-		return lastScanned;
-	}
 
 	/** Test hook: the mask is cleared after every resolve. */
 	boolean maskClean()
@@ -113,8 +89,6 @@ final class ExactCoverageResolver
 		List<Rectangle> candidates, List<Integer> parents, boolean[] dormant,
 		int[][] lists, int[] counts)
 	{
-		long start = System.nanoTime();
-		lastScanned = 0;
 		if (mask.length != pixels.length)
 		{
 			mask = new byte[pixels.length];
@@ -132,11 +106,6 @@ final class ExactCoverageResolver
 		finally
 		{
 			// Never throws into the probe: positions come from the probe's own bounded lists.
-			lastCleared = 0;
-			for (int size : counts)
-			{
-				lastCleared += size;
-			}
 			for (int list = 0; list < lists.length; list++)
 			{
 				int[] positions = lists[list];
@@ -150,7 +119,6 @@ final class ExactCoverageResolver
 				}
 			}
 		}
-		outcome.nanos = System.nanoTime() - start;
 		return outcome;
 	}
 
@@ -187,7 +155,6 @@ final class ExactCoverageResolver
 		boolean[] evidenced = new boolean[size];
 		int fullyCovered = 0;
 		Rectangle canvas = new Rectangle(0, 0, width, height);
-		long scanned = 0;
 		for (int c = 0; c < size; c++)
 		{
 			if (dormant[c])
@@ -199,54 +166,29 @@ final class ExactCoverageResolver
 			Rectangle visible = candidates.get(c).intersection(canvas);
 			boolean any = false;
 			boolean all = true;
-			if (rowClip)
-			{
-				// Probe level 3: the same pixels in the same order, skipping the root per row.
-				rows:
-				for (int y = visible.y; y < visible.y + visible.height; y++)
-				{
-					int row = y * width;
-					int parts = outsideRoot(root, margin, y, visible.x, visible.x + visible.width, segments);
-					for (int s = 0; s < parts; s++)
-					{
-						int to = segments[2 * s + 1];
-						for (int x = segments[2 * s]; x < to; x++)
-						{
-							scanned++;
-							byte state = mask[row + x];
-							if (state == 0)
-							{
-								continue;
-							}
-							any = true;
-							if (state != COLLECTED)
-							{
-								all = false; // A1: a drawn candidate changes every marked pixel
-								break rows;
-							}
-						}
-					}
-				}
-				evidenced[c] = any;
-				covered[c] = any && all;
-				fullyCovered += covered[c] ? 1 : 0;
-				continue;
-			}
-			for (int y = visible.y; all && y < visible.y + visible.height; y++)
+			// Row segments outside the root: the same pixels in the same order as a per-pixel
+			// insideRoot test.
+			rows:
+			for (int y = visible.y; y < visible.y + visible.height; y++)
 			{
 				int row = y * width;
-				for (int x = visible.x; x < visible.x + visible.width; x++)
+				int parts = outsideRoot(root, margin, y, visible.x, visible.x + visible.width, segments);
+				for (int s = 0; s < parts; s++)
 				{
-					scanned++;
-					if (mask[row + x] == 0 || insideRoot(root, margin, x, y))
+					int to = segments[2 * s + 1];
+					for (int x = segments[2 * s]; x < to; x++)
 					{
-						continue;
-					}
-					any = true;
-					if (mask[row + x] != COLLECTED)
-					{
-						all = false; // A1: a drawn candidate changes every marked pixel
-						break;
+						byte state = mask[row + x];
+						if (state == 0)
+						{
+							continue;
+						}
+						any = true;
+						if (state != COLLECTED)
+						{
+							all = false; // A1: a drawn candidate changes every marked pixel
+							break rows;
+						}
 					}
 				}
 			}
@@ -254,7 +196,6 @@ final class ExactCoverageResolver
 			covered[c] = any && all;
 			fullyCovered += covered[c] ? 1 : 0;
 		}
-		lastScanned = scanned;
 
 		int explaining = 0;
 		int[] selected = null;

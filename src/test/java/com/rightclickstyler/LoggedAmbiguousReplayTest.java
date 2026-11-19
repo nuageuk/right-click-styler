@@ -60,10 +60,10 @@ public class LoggedAmbiguousReplayTest
 			Replay replay = new Replay(record);
 			SubmenuTree tree = SubmenuTree.capture(replay.root);
 			List<Integer> truths = new ArrayList<>();
-			List<SubmenuPrototypeProbe.Result> truthResults = new ArrayList<>();
+			List<NativeSubmenuProbe.Result> truthResults = new ArrayList<>();
 			for (int hypothesis : replay.hypotheses())
 			{
-				SubmenuPrototypeProbe.Result result = replay.probe(hypothesis);
+				NativeSubmenuProbe.Result result = replay.probe(hypothesis);
 				assertTrue(name + ": geometry reconstruction (witness counts)",
 					Arrays.equals(replay.witnesses, result.witnesses)
 						&& Arrays.equals(replay.sharedWitnesses, result.sharedWitnesses));
@@ -74,27 +74,27 @@ public class LoggedAmbiguousReplayTest
 					truthResults.add(result);
 				}
 			}
-			for (SubmenuPrototypeProbe.Result result : truthResults)
+			for (NativeSubmenuProbe.Result result : truthResults)
 			{
 				assertEquals(name + ": the previous resolver is still ambiguous",
-					SubmenuPrototypeProbe.State.AMBIGUOUS, result.state);
+					NativeSubmenuProbe.State.AMBIGUOUS, result.state);
 				assertTrue(name, result.framebufferVerified);
 			}
 			if (truths.size() != 1)
 			{
 				indistinguishable.add(key);
-				for (SubmenuPrototypeProbe.Result result : truthResults)
+				for (NativeSubmenuProbe.Result result : truthResults)
 				{
 					assertEquals(name + ": no independent ground truth, so never resolved: " + result.exact,
 						ExactCoverageResolver.State.AMBIGUOUS, result.exact.state);
 					assertEquals(name, truths.size(), result.exact.explainingChains);
-					assertEquals(name + ": stays native", MenuOverlay.PrototypeOutcome.FALLBACK_AMBIGUOUS,
+					assertEquals(name + ": stays native", MenuOverlay.SubmenuOutcome.FALLBACK_AMBIGUOUS,
 						MenuOverlay.authoritativeRejection(result, tree));
 				}
 				continue;
 			}
 			int truth = truths.get(0);
-			SubmenuPrototypeProbe.Result result = truthResults.get(0);
+			NativeSubmenuProbe.Result result = truthResults.get(0);
 			int[] expected = truth < 0 ? new int[0] : new int[]{truth};
 			assertEquals(name + ": resolves the ground truth " + Arrays.toString(expected) + " " + result.exact,
 				ExactCoverageResolver.State.RESOLVED, result.exact.state);
@@ -129,7 +129,6 @@ public class LoggedAmbiguousReplayTest
 			int correct = 0;
 			long marks = 0;
 			long areaMarks = 0;
-			long nanos = 0;
 			for (String[] record : records())
 			{
 				if (INDISTINGUISHABLE.contains(record[0] + "|" + record[1]))
@@ -140,7 +139,7 @@ public class LoggedAmbiguousReplayTest
 				int truth = -1;
 				for (int hypothesis : replay.hypotheses())
 				{
-					SubmenuPrototypeProbe.Result result = replay.probe(hypothesis);
+					NativeSubmenuProbe.Result result = replay.probe(hypothesis);
 					if (Arrays.equals(replay.changed, result.changed) && Arrays.equals(replay.sharedChanged, result.sharedChanged))
 					{
 						truth = hypothesis;
@@ -189,7 +188,6 @@ public class LoggedAmbiguousReplayTest
 				ExactCoverageResolver.Outcome outcome = new ExactCoverageResolver().resolve(pixels, replay.width,
 					replay.height, sentinel, root, 2, tree.candidateBounds, tree.candidateParents, dormant,
 					new int[][]{positions}, new int[]{count});
-				nanos += outcome.nanos;
 				int[] expected = truth < 0 ? new int[0] : new int[]{truth};
 				if (outcome.state == ExactCoverageResolver.State.RESOLVED)
 				{
@@ -199,8 +197,8 @@ public class LoggedAmbiguousReplayTest
 				}
 			}
 			int judged = records().size() - INDISTINGUISHABLE.size();
-			report.append(String.format(" step=%d resolved=%d/%d marks/frame=%d (area marking %d) resolverUs=%.0f;",
-				step, correct, judged, marks / judged, areaMarks / judged, nanos / 1e3 / judged));
+			report.append(String.format(" step=%d resolved=%d/%d marks/frame=%d (area marking %d);",
+				step, correct, judged, marks / judged, areaMarks / judged));
 			if (step <= 4)
 			{
 				assertEquals("step " + step, judged, correct);
@@ -217,78 +215,6 @@ public class LoggedAmbiguousReplayTest
 			total += value;
 		}
 		return total;
-	}
-
-	/** Timing only, skipped unless -Drightclickstyler.benchmark=true. */
-	@Test
-	public void benchmarkExactCoverageCost() throws Exception
-	{
-		org.junit.Assume.assumeTrue(Boolean.getBoolean("rightclickstyler.benchmark"));
-		for (String[] record : records())
-		{
-			if (!(record[0].equals("step1") && (record[1].equals("974") || record[1].equals("587")
-				|| record[1].equals("2129")) || record[0].equals("exact1") && (record[1].equals("2099")
-				|| record[1].equals("2271"))))
-			{
-				continue;
-			}
-			Replay replay = new Replay(record);
-			int truth = -1;
-			for (int hypothesis : replay.hypotheses())
-			{
-				SubmenuPrototypeProbe.Result result = replay.probe(hypothesis);
-				if (Arrays.equals(replay.changed, result.changed) && Arrays.equals(replay.sharedChanged, result.sharedChanged))
-				{
-					truth = hypothesis;
-				}
-			}
-			int[] pixels = new int[replay.width * replay.height];
-			Menu[] chain = truth < 0 ? new Menu[0] : new Menu[]{replay.candidates.get(truth)};
-			SubmenuTree tree = SubmenuTree.capture(replay.root);
-			SubmenuPrototypeProbe probe = new SubmenuPrototypeProbe();
-			probe.requireExact(true);
-			Runnable draw = () ->
-			{
-				replay.fill(pixels, ExactCoverageResolverTest.bounds(replay.root));
-				for (Menu menu : chain)
-				{
-					replay.fill(pixels, ExactCoverageResolverTest.bounds(menu));
-				}
-			};
-			int runs = 300;
-			long[] total = new long[runs];
-			long[] exact = new long[runs];
-			long[][] phases = new long[6][runs];
-			for (int i = -100; i < runs; i++)
-			{
-				SubmenuPrototypeProbe.Result result = probe.samplePixels(pixels, replay.width, replay.height, tree, draw);
-				if (i >= 0)
-				{
-					total[i] = result.nanoseconds;
-					exact[i] = result.exact.nanos;
-					phases[0][i] = result.preparationNanos;
-					phases[1][i] = result.copyNanos;
-					phases[2][i] = result.markerNanos;
-					phases[3][i] = result.comparisonNanos;
-					phases[4][i] = result.restoreNanos;
-					phases[5][i] = result.drawNanos;
-				}
-			}
-			Arrays.sort(total);
-			Arrays.sort(exact);
-			StringBuilder split = new StringBuilder();
-			String[] names = {"setup", "copy", "marking", "compare", "restore", "nativeDraw"};
-			for (int phase = 0; phase < phases.length; phase++)
-			{
-				Arrays.sort(phases[phase]);
-				split.append(' ').append(names[phase]).append('=').append(phases[phase][runs / 2] / 1000);
-			}
-			System.out.printf("BENCH frame=%s %s visibleCandidates=%d probeMedianUs=%.0f probeP95Us=%.0f exactMedianUs=%.0f exactP95Us=%.0f exactShare=%.0f%%%n",
-				record[1], record[2], tree.candidateBounds.stream().filter(b -> b.width > 0).count(),
-				total[runs / 2] / 1e3, total[runs * 95 / 100] / 1e3, exact[runs / 2] / 1e3, exact[runs * 95 / 100] / 1e3,
-				100.0 * exact[runs / 2] / total[runs / 2]);
-			System.out.println("BENCH frame=" + record[1] + " phase medians (us):" + split);
-		}
 	}
 
 	static List<String[]> records() throws Exception
@@ -360,13 +286,12 @@ public class LoggedAmbiguousReplayTest
 			return hypotheses;
 		}
 
-		SubmenuPrototypeProbe.Result probe(int drawn)
+		NativeSubmenuProbe.Result probe(int drawn)
 		{
 			int[] pixels = new int[width * height];
 			Menu[] chain = drawn < 0 ? new Menu[0] : new Menu[]{candidates.get(drawn)};
 			SubmenuTree tree = SubmenuTree.capture(root);
-			SubmenuPrototypeProbe probe = new SubmenuPrototypeProbe();
-			probe.requireExact(true);
+			NativeSubmenuProbe probe = new NativeSubmenuProbe();
 			return probe.samplePixels(pixels, width, height, tree, () ->
 			{
 				fill(pixels, ExactCoverageResolverTest.bounds(root));
