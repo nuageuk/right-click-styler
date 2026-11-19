@@ -442,6 +442,71 @@ public class MenuOverlayTest
 	}
 
 	@Test
+	public void inventoryPluginParentsReuseMatchingItemTargetClassification()
+	{
+		String target = "<col=ff9040>Drakan's medallion";
+		StubMenu root = new StubMenu(10, 10, 160, 64);
+		MenuEntry[] entries = new MenuEntry[5];
+		entries[0] = new StubMenuEntry(MenuAction.CC_OP, 22400, null)
+			.setOption("Examine").setTarget(target);
+		String[] options = {"Inventory tag", "Swap left-click", "Swap shift-click", "Custom plugin"};
+		String[] targets = {target, target, "Drakan's medallion",
+			"<col=39c949>Drakan's medallion"};
+		for (int i = 0; i < options.length; i++)
+		{
+			StubMenu child = new StubMenu(170, 25 + i * 15, 160, 34);
+			child.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Pick", null)});
+			entries[i + 1] = new StubMenuEntry(MenuAction.RUNELITE, -1, child)
+				.setOption(options[i]).setTarget(targets[i]);
+		}
+		root.setMenuEntries(entries);
+		List<FilledMenu> filled = fill(SubmenuTree.capture(root));
+		for (int i = 0; i < options.length; i++)
+		{
+			assertEquals(options[i], MenuRenderer.TargetKind.ITEM,
+				filled.get(0).rows.get(options.length - 1 - i).kind());
+			assertEquals(options[i], MenuRenderer.TargetKind.ITEM, filled.get(i + 1).headerKind);
+			assertEquals(MenuRenderer.TargetKind.OTHER, filled.get(i + 1).rows.get(0).kind());
+		}
+	}
+
+	@Test
+	public void unrelatedPluginSubmenuDoesNotBecomeAnItemTarget()
+	{
+		StubMenu child = new StubMenu(170, 25, 160, 34);
+		child.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Pick", null)});
+		StubMenu root = new StubMenu(10, 10, 160, 64);
+		root.setMenuEntries(new MenuEntry[]{
+			new StubMenuEntry(MenuAction.CC_OP, 22400, null)
+				.setOption("Examine").setTarget("<col=ff9040>Drakan's medallion"),
+			new StubMenuEntry(MenuAction.RUNELITE, -1, child)
+				.setOption("Configure").setTarget("<col=ff9040>Another target")
+		});
+		List<FilledMenu> filled = fill(SubmenuTree.capture(root));
+		assertEquals(MenuRenderer.TargetKind.OTHER, filled.get(0).rows.get(0).kind());
+		assertEquals(MenuRenderer.TargetKind.OTHER, filled.get(1).headerKind);
+	}
+
+	@Test
+	public void ambiguousMatchingTargetsDoNotSupplyAnItemOwner()
+	{
+		StubMenu child = new StubMenu(170, 25, 160, 34);
+		child.setMenuEntries(new MenuEntry[]{new StubMenuEntry("Pick", null)});
+		StubMenu root = new StubMenu(10, 10, 160, 64);
+		root.setMenuEntries(new MenuEntry[]{
+			new StubMenuEntry(MenuAction.CC_OP, 22400, null)
+				.setOption("Examine").setTarget("<col=ff9040>Shared name"),
+			new StubMenuEntry(MenuAction.GAME_OBJECT_FIRST_OPTION, -1, null)
+				.setOption("Open").setTarget("<col=00ffff>Shared name"),
+			new StubMenuEntry(MenuAction.RUNELITE, -1, child)
+				.setOption("Configure").setTarget("Shared name")
+		});
+		List<FilledMenu> filled = fill(SubmenuTree.capture(root));
+		assertEquals(MenuRenderer.TargetKind.OTHER, filled.get(0).rows.get(0).kind());
+		assertEquals(MenuRenderer.TargetKind.OTHER, filled.get(1).headerKind);
+	}
+
+	@Test
 	public void ambiguousChildFallsBackAndDrawFailureRestoresPixels()
 	{
 		StubMenu root = new StubMenu(10, 10, 60, 60);

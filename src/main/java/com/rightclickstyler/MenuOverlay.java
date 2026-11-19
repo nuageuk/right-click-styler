@@ -1018,7 +1018,8 @@ class MenuOverlay extends Overlay
 			if (entry != null)
 			{
 				row.set(entry.getOption(), entry.getTarget(),
-					parentKind == null ? classify(entry) : childKind(entry, parentKind, parentPlainTarget),
+					parentKind == null ? classifyWithItemOwner(entry, entries)
+						: childKind(entry, parentKind, parentPlainTarget),
 					childFlags != null && childFlags[i],
 					childOpensLeft != null && childOpensLeft[i]);
 			}
@@ -1070,6 +1071,41 @@ class MenuOverlay extends Overlay
 			return MenuRenderer.TargetKind.ITEM;
 		}
 		return MenuRenderer.TargetKind.OTHER;
+	}
+
+	/** RuneLite inventory plugins copy the Examine target into a new submenu parent. */
+	private static MenuRenderer.TargetKind classifyWithItemOwner(MenuEntry entry, MenuEntry[] entries)
+	{
+		MenuRenderer.TargetKind own = classify(entry);
+		if (own != MenuRenderer.TargetKind.OTHER || entry.getType() != MenuAction.RUNELITE
+			|| entry.getSubMenu() == null || entry.getTarget() == null)
+		{
+			return own;
+		}
+		String target = Text.removeTags(entry.getTarget()).trim();
+		if (target.isEmpty())
+		{
+			return own;
+		}
+		boolean itemOwner = false;
+		for (MenuEntry candidate : entries)
+		{
+			if (candidate == null || candidate == entry || candidate.getTarget() == null
+				|| !target.equals(Text.removeTags(candidate.getTarget()).trim()))
+			{
+				continue;
+			}
+			MenuRenderer.TargetKind candidateKind = classify(candidate);
+			if (candidateKind == MenuRenderer.TargetKind.ITEM && candidate.getItemId() != NO_ITEM)
+			{
+				itemOwner = true;
+			}
+			else if (candidateKind != MenuRenderer.TargetKind.OTHER)
+			{
+				return own;
+			}
+		}
+		return itemOwner ? MenuRenderer.TargetKind.ITEM : own;
 	}
 
 	static boolean isGameObjectAction(MenuAction type)
