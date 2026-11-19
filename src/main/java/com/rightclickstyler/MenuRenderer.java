@@ -530,14 +530,15 @@ final class MenuRenderer
 
 	/**
 	 * A target-derived header colours its tagged spans exactly as the opening row's target does,
-	 * so a Custom target colour also reaches it. Untagged text, and every header that is not
-	 * target text, keeps the header colour or its own tag.
+	 * so a Custom target colour also reaches it. An untagged item target uses the Custom Item
+	 * colour. Other untagged text, and headers that are not target text, keep the header colour.
 	 */
 	private Color headerRunColour(Run run, TargetKind kind)
 	{
 		if (run.tagColour == null)
 		{
-			return theme.headerText;
+			return kind == TargetKind.ITEM && targetColours.targetMode == TargetMode.CUSTOM
+				? targetColours.resolve(run, kind) : theme.headerText;
 		}
 		return kind == null ? run.tagColour : targetColours.resolve(run, kind);
 	}

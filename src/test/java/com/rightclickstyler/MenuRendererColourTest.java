@@ -159,6 +159,19 @@ public class MenuRendererColourTest
 	}
 
 	@Test
+	public void untaggedItemTargetHeaderUsesCustomItemColour()
+	{
+		BufferedImage image = renderHeader("Drakan's medallion", MenuRenderer.TargetKind.ITEM, CONFIG);
+		assertTrue(hasHeaderColour(image, CUSTOM));
+		assertFalse(hasHeaderColour(image, HEADER_TEXT));
+
+		BufferedImage game = renderHeader("Drakan's medallion", MenuRenderer.TargetKind.ITEM,
+			new RightClickStylerConfig() { });
+		assertTrue(hasHeaderColour(game, HEADER_TEXT));
+		assertFalse(hasHeaderColour(game, CUSTOM));
+	}
+
+	@Test
 	public void itemSubmenuHeaderKeepsDefaultItemColourInGameMode()
 	{
 		BufferedImage image = renderHeader("<col=ff9040>Drakan's medallion",
@@ -202,16 +215,13 @@ public class MenuRendererColourTest
 	}
 
 	@Test
-	public void headersThatAreNotTargetTextKeepTheirOwnColours()
+	public void optionDerivedHeadersKeepTheirOwnColours()
 	{
 		// An option-derived header, or a caller passing no kind, draws its tags as written.
 		BufferedImage tagged = renderHeader("<col=ff9040>Teleport", null, CONFIG);
 		assertTrue(hasHeaderColour(tagged, new Color(0xFF9040)));
 		assertFalse(hasHeaderColour(tagged, CUSTOM));
 
-		BufferedImage plain = renderHeader("Drakan's medallion", MenuRenderer.TargetKind.ITEM, CONFIG);
-		assertTrue(hasHeaderColour(plain, HEADER_TEXT));
-		assertFalse(hasHeaderColour(plain, CUSTOM));
 	}
 
 	private static final Color HEADER_TEXT = new Color(0xEEEEEE);
