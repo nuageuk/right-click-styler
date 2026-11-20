@@ -19,8 +19,8 @@ Classic is the default theme, using the RuneScape Bold font.
 | Area | Options |
 | --- | --- |
 | Colours | Background, border, header, header text, option text, hover, accent |
-| Style | Corner radius, opacity, hover style, border, drop shadow, header on or off |
-| Text | RuneScape Regular, Small or Bold, Sans or Serif, font size and text shadow |
+| Style | Corner radius, separate background and hover opacity, hover style, border, drop shadow, header on or off |
+| Text | RuneScape Regular, Small or Bold, Sans or Serif, font size, text shadow and text offset |
 | Action highlights | Colours and optional bold text for actions such as Attack or Pickpocket |
 | Targets | Colours for NPCs, players, items, objects and everything else |
 | Combat levels | Keep the game's colours, colour by level difference, or hide levels |
@@ -28,7 +28,7 @@ Classic is the default theme, using the RuneScape Bold font.
 
 ## Installation
 
-Once Right Click Styler is listed on the Plugin Hub, open RuneLite's configuration panel, open the Plugin Hub, search for **Right Click Styler** and install it.
+Open RuneLite's configuration panel, open the Plugin Hub, search for **Right Click Styler** and install it.
 
 ## Getting started
 
@@ -42,7 +42,15 @@ Appearance and theme settings are in the sidebar editor. The **Show sidebar butt
 
 Interface Styles can remain enabled, but its **High detail menu** must be off and **Menu alpha** must be 255. Otherwise the two plugins can draw conflicting menus.
 
-Right Click Styler keeps the game's native menu width, row positions and click regions. Scrollable menus and menus containing submenus use the normal game appearance. This includes player menus containing submenus created by Interface Styles' condensed player options.
+Right Click Styler can style ordinary menus, child submenus and scrollable menus. It keeps the game's native menu width, row positions and click regions; the game still handles hovering and selection. For submenu and scrollable menus, the plugin checks the native draw before replacing its appearance. If it cannot verify a frame, that frame keeps the normal game appearance.
+
+Under **Targets**, choose **Game** to keep the game's target colours or **Custom** to choose colours for NPCs, players, items, objects and other targets. **Reset Target Colours to Defaults** restores those colour values. Intentional inline colours supplied by other plugins are preserved in the observed supported cases; some third-party menu additions may still use native styling.
+
+<!-- SCREENSHOT TODO S01
+File: docs/images/styled-submenus.png
+Capture: Open a Menu Entry Swapper submenu and show the styled parent and child together.
+Status: Awaiting manual capture; see docs/SCREENSHOT_CHECKLIST.md.
+-->
 
 See the [full settings guide](docs/GUIDE.md) for theme sharing, profiles, reset behaviour, advanced settings and troubleshooting.
 

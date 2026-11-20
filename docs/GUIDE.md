@@ -6,6 +6,12 @@ Classic is selected by default, and every built-in theme uses the RuneScape Bold
 
 ![The settings panel](images/overall-menu.png)
 
+<!-- SCREENSHOT TODO S02
+File: docs/images/overall-menu.png (replace the existing capture)
+Capture: Show the current sidebar with the Style and Targets sections and their new controls.
+Status: Awaiting manual recapture; see SCREENSHOT_CHECKLIST.md.
+-->
+
 ## Getting started
 
 1. Click the Right Click Styler button in the RuneLite sidebar.
@@ -73,7 +79,8 @@ Classic uses a brown background, black border and header, brown header text and 
 ![Style](images/style.png)
 
 - **Corner radius**: controls how rounded the menu corners are, from 0 for square corners to 8.
-- **Opacity**: controls the background, header fill and Fill or Bar hover fill, from 40 to 100. It does not fade text, borders, accent bars, accent outlines or shadows.
+- **Background opacity**: controls the background and header fill from 0% to 100%.
+- **Hover opacity**: independently controls the Hover fill used by Fill and Bar, from 0% to 100%. The two translucent fills can overlap. Neither control fades text, borders, accent bars, accent outlines or shadows.
 - **Hover style**:
   - **Fill**: fills the hovered row with Hover.
   - **Bar**: uses a Hover fill with an Accent bar on the left.
@@ -84,7 +91,19 @@ Classic uses a brown background, black border and header, brown header text and 
 - **Drop shadow**: draws a soft shadow beneath the menu.
 - **Header**: shows "Choose Option". Hiding it removes the header area while keeping rows aligned with the game's click areas.
 
-Classic defaults to square corners, 100 opacity, Text hover, Border on, Drop shadow off and Header on.
+Classic defaults to square corners, 100% background and hover opacity, Text hover, Border on, Drop shadow off and Header on.
+
+<!-- SCREENSHOT TODO S03
+File: docs/images/style.png (replace the existing capture)
+Capture: Show both opacity controls in the Style section.
+Status: Awaiting manual recapture; see SCREENSHOT_CHECKLIST.md.
+-->
+
+<!-- SCREENSHOT TODO S04
+File: docs/images/opacity-example.png
+Capture: Show a menu with a translucent background and a clearly visible hovered row.
+Status: Awaiting manual capture; see SCREENSHOT_CHECKLIST.md.
+-->
 
 ## Text
 
@@ -126,6 +145,14 @@ The target is the thing an action is used on, such as "Guard" in "Attack Guard".
 
 The default custom colours are yellow for NPCs, white for players, orange for items, cyan for objects and white for Other.
 
+Choose **Reset Target Colours to Defaults** in the Targets section to restore those five colour values. This resets target colours, not your saved themes. In Custom mode, colours explicitly added within a target by the game or another plugin are preserved where they differ from the game's usual category colour; results can vary with the source formatting.
+
+<!-- SCREENSHOT TODO S06
+File: docs/images/custom-target-colours.png
+Capture: Show Custom target mode and a styled menu with visibly different target categories.
+Status: Awaiting manual capture; see SCREENSHOT_CHECKLIST.md.
+-->
+
 ## Combat levels
 
 ![Combat levels](images/combat-levels.png)
@@ -151,7 +178,7 @@ You will not normally need these controls.
 - **Show hit rows**: outlines each native row click area for alignment checking. It is off by default.
 - **Reset all settings**: after confirmation, restores Action highlights, Targets, Combat levels and Advanced to their defaults, selects Classic and discards unsaved theme edits. Saved custom themes are preserved.
 
-The menu always keeps the game's native width. Large fonts, long entries or a large Text offset X can therefore clip text instead of widening the menu.
+The menu keeps the game's native width and click areas. When text is wider than its available row or header space, the renderer fits it within that space. Narrow menus or large offsets may make the text appear compressed.
 
 ## RuneLite profiles
 
@@ -174,16 +201,30 @@ The sidebar's **Advanced > Reset all settings** also restores visual defaults an
 ## Compatibility and limitations
 
 - Interface Styles can remain enabled if **High detail menu** is off and **Menu alpha** is 255. If either setting conflicts, the sidebar shows a warning and a chat message appears once per Right Click Styler plugin session when the conflict is detected while logged in.
-- Scrollable menus use the normal game appearance.
-- Any menu containing a submenu uses the normal game appearance because the plugin cannot determine whether the submenu is open. Interface Styles' condensed player options can therefore make the whole player menu use native styling.
+- Scrollable parent menus and child submenus can be styled when the native framebuffer draw and menu layout can be verified. Ambiguous or unsupported frames keep the normal game appearance.
 - Right Click Styler preserves the game's menu width, row positions and click regions. It changes appearance only.
-- If custom rendering fails, the plugin uses the normal game menu for the rest of that plugin session.
+- A failed final submenu draw uses native rendering for the remainder of that menu opening; a new opening retries. A failed ordinary-menu render uses native rendering until the plugin is restarted. In rare cases, a menu change after native drawing has been consumed can leave one frame without a visible menu.
+- Ground-item icons inserted into context menus by other plugins are not currently reproduced by the styled renderer. Menu geometry and selection remain native.
+
+The submenu path samples the game's own draw to identify visible child regions, then restores the sampled framebuffer before drawing the style. It does not create menu actions or change the game's selection handling.
+
+<!-- SCREENSHOT TODO S05
+File: docs/images/scrollable-menu.png
+Capture: Show a styled scrollable player menu with its visible rows and scroll position.
+Status: Awaiting manual capture; see SCREENSHOT_CHECKLIST.md.
+-->
+
+<!-- SCREENSHOT TODO S07
+File: docs/images/third-party-colours.png
+Capture: Show styled entries with intentional inline colours from Loot Filters and Identificator.
+Status: Awaiting manual capture; see SCREENSHOT_CHECKLIST.md.
+-->
 
 ## Troubleshooting
 
 ### A menu uses the normal game appearance
 
-Scrollable menus and menus containing submenus are intentionally left to the game. If every ordinary menu remains native after a drawing failure, disable and re-enable Right Click Styler to start a new plugin session.
+A submenu or scrollable menu can temporarily use the normal appearance when its native draw cannot be verified. If an ordinary menu keeps using the normal appearance after a drawing failure, disable and re-enable Right Click Styler to start a new plugin session.
 
 ### The normal menu appears beneath a translucent theme
 
