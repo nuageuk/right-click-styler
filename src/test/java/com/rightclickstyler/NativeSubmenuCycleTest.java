@@ -971,9 +971,9 @@ public class NativeSubmenuCycleTest
 		}
 	}
 
-	/** The diagnostics name the clamping and the first differing row for the live frame. */
+	/** Clamped children share a rectangle but contain different rows, so the frame stays native. */
 	@Test
-	public void diagnosticsExplainTheLiveScreenEdgeFallback() throws Exception
+	public void screenEdgeAmbiguityKeepsTheNativeMenu() throws Exception
 	{
 		NativeModel model = medallionModel(696, CANVAS_HEIGHT - NativeModel.nativeHeight(10), 10,
 			MEDALLION_OPS, "Wear", "Drop");
@@ -991,14 +991,11 @@ public class NativeSubmenuCycleTest
 		assertEquals(-1, result.exact.hiddenCandidate);
 		// Candidate #0 is entry 2 (shift-click, omits Drop), #1 entry 3 (left-click, omits Wear).
 		assertEquals("chains [0] and [1] differ: ROWS depth=1 row=0 option 'Wear' vs 'Ver Sinhaza'", why.toString());
-		String geometry = MenuOverlay.describeGeometry(tree, result, viewport, CANVAS_WIDTH, CANVAS_HEIGHT);
-		assertTrue(geometry, geometry.contains("root=696,420,253x172 rootEdges=bottom"));
-		assertTrue(geometry, geometry.contains("[#0 parent=root row=7 'Swap shift-click' at=565,465,131x127 side=left"
-			+ " rows=7 naturalY=525 clampedBottom edges=bottom covered sameRectAs=#1]"));
-		assertTrue(geometry, geometry.contains("[#1 parent=root row=6 'Swap left-click' at=565,465,131x127 side=left"
-			+ " rows=7 naturalY=510 clampedBottom edges=bottom covered sameRectAs=#0]"));
-		assertTrue(MenuOverlay.describePointer(tree, viewport, model.live),
-			MenuOverlay.describePointer(tree, viewport, model.live).contains("rootRow=7 'Swap shift-click'"));
+		assertEquals(new Rectangle(696, 420, 253, 172), tree.nodes.get(0).bounds);
+		assertEquals(new Rectangle(565, 465, 131, 127), tree.candidateBounds.get(0));
+		assertEquals(tree.candidateBounds.get(0), tree.candidateBounds.get(1));
+		assertEquals(CANVAS_HEIGHT, tree.candidateBounds.get(0).y + tree.candidateBounds.get(0).height);
+		assertEquals(7, viewport.hoverIndex(model.live));
 	}
 
 	@Test
