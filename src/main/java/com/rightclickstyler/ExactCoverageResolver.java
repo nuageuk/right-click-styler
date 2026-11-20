@@ -23,7 +23,9 @@ import java.util.List;
  * RESOLVED only when exactly one chain explains the frame and no candidate without evidence
  * could extend it. Two chains with the same visible pixels (identical rectangles, a nested
  * child contained in its parent, a difference clipped off the canvas) stay AMBIGUOUS, and
- * evidence that contradicts A1 or A2 is UNEXPLAINED. Neither is ever a guess.
+ * evidence that contradicts A1 or A2 is UNEXPLAINED. Neither is ever a guess. An AMBIGUOUS
+ * outcome lists every explaining chain as {@link Outcome#alternatives}, so the overlay can check
+ * whether they would all render identically; it still never picks one by identity.
  */
 final class ExactCoverageResolver
 {
@@ -34,6 +36,7 @@ final class ExactCoverageResolver
 
 	static final class Outcome
 	{
+		private static final int[][] NO_ALTERNATIVES = new int[0][];
 		static final Outcome NOT_EVALUATED = new Outcome(State.NOT_EVALUATED, new int[0], 0, new int[0], 0);
 
 		final State state;
@@ -44,8 +47,27 @@ final class ExactCoverageResolver
 		/** Evidence only: the fully covered candidate indexes, ascending. Never used to decide. */
 		final int[] covered;
 		final int changedPixels;
+		/**
+		 * AMBIGUOUS only: every chain that explains the frame, in ascending leaf order, when no
+		 * visible candidate without evidence could extend any of them. Under A1 and A2 the chain
+		 * native drew is then one of these. Empty in every other case. It never selects a chain:
+		 * the overlay may theme the frame only when all of them would render identically.
+		 */
+		final int[][] alternatives;
+		/**
+		 * Evidence only: the visible candidate without evidence that could be drawn beneath an
+		 * explaining chain's last menu (why an UNEVIDENCED outcome, or an AMBIGUOUS one without
+		 * alternatives, was withheld); -1 when none. Never used to decide.
+		 */
+		final int hiddenCandidate;
 
 		Outcome(State state, int[] chain, int explainingChains, int[] covered, int changedPixels)
+		{
+			this(state, chain, explainingChains, covered, changedPixels, NO_ALTERNATIVES, -1);
+		}
+
+		Outcome(State state, int[] chain, int explainingChains, int[] covered, int changedPixels,
+			int[][] alternatives, int hiddenCandidate)
 		{
 			this.state = state;
 			this.chain = chain;
@@ -53,12 +75,15 @@ final class ExactCoverageResolver
 			this.covered = covered;
 			this.fullyCovered = covered.length;
 			this.changedPixels = changedPixels;
+			this.alternatives = alternatives;
+			this.hiddenCandidate = hiddenCandidate;
 		}
 
 		@Override
 		public String toString()
 		{
 			return state + "(chain=" + java.util.Arrays.toString(chain) + " explaining=" + explainingChains
+				+ " alternatives=" + alternatives.length + " hidden=" + hiddenCandidate
 				+ " fullyCovered=" + fullyCovered + " changed=" + changedPixels + ")";
 		}
 	}
@@ -199,6 +224,8 @@ final class ExactCoverageResolver
 
 		int explaining = 0;
 		int[] selected = null;
+		// Every explaining chain, kept so an ambiguous frame can report them all.
+		java.util.List<int[]> explainingList = null;
 		int[] path = new int[size + 1];
 		// leaf == -1 is the empty chain: root only.
 		for (int leaf = -1; leaf < size; leaf++)
@@ -218,13 +245,23 @@ final class ExactCoverageResolver
 			{
 				continue;
 			}
+			int[] found = new int[depth];
+			for (int i = 0; i < depth; i++)
+			{
+				found[i] = path[depth - 1 - i];
+			}
 			if (++explaining == 1)
 			{
-				selected = new int[depth];
-				for (int i = 0; i < depth; i++)
+				selected = found;
+			}
+			else
+			{
+				if (explainingList == null)
 				{
-					selected[i] = path[depth - 1 - i];
+					explainingList = new java.util.ArrayList<>();
+					explainingList.add(selected);
 				}
+				explainingList.add(found);
 			}
 		}
 		int[] coveredIndexes = new int[fullyCovered];
@@ -241,19 +278,46 @@ final class ExactCoverageResolver
 		}
 		if (explaining > 1)
 		{
-			return new Outcome(State.AMBIGUOUS, new int[0], explaining, coveredIndexes, changedCount);
+			// The alternatives are complete only when none could hide an unevidenced child.
+			for (int[] alternative : explainingList)
+			{
+				int hidden = hiddenWithoutEvidence(alternative, size, dormant, evidenced, parents);
+				if (hidden >= 0)
+				{
+					return new Outcome(State.AMBIGUOUS, new int[0], explaining, coveredIndexes, changedCount,
+						Outcome.NO_ALTERNATIVES, hidden);
+				}
+			}
+			return new Outcome(State.AMBIGUOUS, new int[0], explaining, coveredIndexes, changedCount,
+				explainingList.toArray(new int[0][]), -1);
 		}
-		// A visible candidate with no marked pixels outside the root could be drawn beneath the
-		// chain's last menu without leaving evidence.
-		int last = selected.length == 0 ? -1 : selected[selected.length - 1];
+		int hidden = hiddenWithoutEvidence(selected, size, dormant, evidenced, parents);
+		if (hidden >= 0)
+		{
+			return new Outcome(State.UNEVIDENCED, new int[0], explaining, coveredIndexes, changedCount,
+				Outcome.NO_ALTERNATIVES, hidden);
+		}
+		return new Outcome(State.RESOLVED, selected, explaining, coveredIndexes, changedCount);
+	}
+
+	/**
+	 * A visible candidate with no marked pixels outside the root could be drawn beneath the
+	 * chain's last menu without leaving evidence.
+	 *
+	 * @return the first such candidate, or -1
+	 */
+	private static int hiddenWithoutEvidence(int[] chain, int size, boolean[] dormant,
+		boolean[] evidenced, List<Integer> parents)
+	{
+		int last = chain.length == 0 ? -1 : chain[chain.length - 1];
 		for (int c = 0; c < size; c++)
 		{
 			if (!dormant[c] && !evidenced[c] && parents.get(c) == last)
 			{
-				return new Outcome(State.UNEVIDENCED, new int[0], explaining, coveredIndexes, changedCount);
+				return c;
 			}
 		}
-		return new Outcome(State.RESOLVED, selected, explaining, coveredIndexes, changedCount);
+		return -1;
 	}
 
 	/** A2: every changed marked pixel outside the root lies inside a chain rectangle. */

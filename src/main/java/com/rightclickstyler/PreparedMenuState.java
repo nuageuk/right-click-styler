@@ -21,16 +21,15 @@ final class PreparedMenuState
 	private final EntryState[][] selectedEntries;
 	private final int[] selectedNodes;
 
-	private PreparedMenuState(SubmenuTree tree, int[] activeChain)
+	/** @param nodes the root (0) first, then each selected menu's node index once */
+	private PreparedMenuState(SubmenuTree tree, int[] nodes)
 	{
 		this.tree = tree;
-		this.selectedNodes = new int[activeChain.length + 1];
+		this.selectedNodes = nodes;
 		this.selectedEntries = new EntryState[selectedNodes.length][];
 		for (int depth = 0; depth < selectedNodes.length; depth++)
 		{
-			int nodeIndex = depth == 0 ? 0 : activeChain[depth - 1] + 1;
-			selectedNodes[depth] = nodeIndex;
-			MenuEntry[] entries = tree.nodes.get(nodeIndex).entries;
+			MenuEntry[] entries = tree.nodes.get(selectedNodes[depth]).entries;
 			EntryState[] snapshot = new EntryState[entries.length];
 			for (int i = 0; i < entries.length; i++)
 			{
@@ -42,7 +41,32 @@ final class PreparedMenuState
 
 	static PreparedMenuState capture(SubmenuTree tree, int[] activeChain)
 	{
-		return new PreparedMenuState(tree, activeChain);
+		return capture(tree, new int[][]{activeChain});
+	}
+
+	/**
+	 * Every menu of every chain, so the frame drops if any of them changes. Used for visually
+	 * equivalent alternatives, where any one of the chains may be the one native drew.
+	 */
+	static PreparedMenuState capture(SubmenuTree tree, int[][] chains)
+	{
+		int[] nodes = new int[tree.nodes.size()];
+		boolean[] seen = new boolean[tree.nodes.size()];
+		int count = 1;
+		seen[0] = true;
+		for (int[] chain : chains)
+		{
+			for (int candidate : chain)
+			{
+				int node = candidate + 1;
+				if (!seen[node])
+				{
+					seen[node] = true;
+					nodes[count++] = node;
+				}
+			}
+		}
+		return new PreparedMenuState(tree, java.util.Arrays.copyOf(nodes, count));
 	}
 
 	boolean matches(Menu currentRoot)
@@ -74,7 +98,7 @@ final class PreparedMenuState
 		for (int depth = 0; depth < selectedNodes.length; depth++)
 		{
 			SubmenuTree.Node node = tree.nodes.get(selectedNodes[depth]);
-			if (depth > 0)
+			if (node.parentNode >= 0)
 			{
 				MenuEntry[] parentEntries = tree.nodes.get(node.parentNode).menu.getMenuEntries();
 				if (parentEntries == null || node.parentEntryIndex >= parentEntries.length

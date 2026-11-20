@@ -71,6 +71,8 @@ public class NativeSubmenuCycleTest
 	private static final int OPEN_DELAY_CYCLES = 2;
 	private static final int CHILD_ROWS = 5;
 	private static final int GRAY = 0xFF808080;
+	/** The client's menu fill colour. */
+	private static final int NATIVE_FILL = 0xFF5D5447;
 
 	@Test
 	public void scrollablePlayerMenuWithoutChildrenUsesSubmenuPath() throws Exception
@@ -250,9 +252,38 @@ public class NativeSubmenuCycleTest
 	}
 
 	@Test
+	public void swapSubmenuTransitionsAndEquivalentEntryRebuildsStayThemed() throws Exception
+	{
+		for (boolean opensLeft : new boolean[]{false, true})
+		{
+			int rootX = opensLeft ? 750 : 434;
+			NativeModel model = new NativeModel(rootX, 130, 212, 4, false, 0,
+				entry -> entry == 1 || entry == 2);
+			model.rootEntryOptions[1] = "Swap shift-click";
+			model.rootEntryOptions[2] = "Swap left-click";
+			int childX = opensLeft ? 520 : 646;
+			model.retain(1, childX, 160, 203);
+			model.openLogged(2, childX, 175, 220);
+			model.live = new Point(rootX + 40, 180);
+			Harness harness = harness(model);
+			assertThemedNativeState("shift-click opensLeft=" + opensLeft, harness.frame(), model);
+			int entryIndex = model.rows - 1 - 2;
+			model.root.entries[entryIndex] = entry(model.rootEntryOptions, entryIndex,
+				model.childByEntry[entryIndex]);
+			assertThemedNativeState("equivalent entry rebuilt opensLeft=" + opensLeft,
+				harness.frame(), model);
+			model.open = model.childAtRow(1);
+			assertThemedNativeState("left-click switch opensLeft=" + opensLeft,
+				harness.frame(), model);
+		}
+	}
+
+	@Test
 	public void switchToAnIndistinguishableChildStaysNative() throws Exception
 	{
 		NativeModel model = longLoggedRoot(0);
+		model.rootEntryOptions[model.rows - 1 - 20] = "Swap shift-click";
+		model.rootEntryOptions[model.rows - 1 - 21] = "Swap left-click";
 		model.retain(20, 646, 400, 220);
 		model.retain(21, 646, 400, 220); // identical rectangles: indistinguishable by pixels
 		model.openLogged(15, 646, 225, 235);
@@ -331,6 +362,873 @@ public class NativeSubmenuCycleTest
 		assertEquals(Shown.NATIVE, frame.shown);
 		assertEquals(MenuOverlay.ExactComparison.BOTH_UNRESOLVED, comparison(harness));
 		assertEquals(1L, outcome(harness, MenuOverlay.SubmenuOutcome.FALLBACK_AMBIGUOUS));
+	}
+
+	/** The live Swap trace: two distinct children retained the same 131x127 rectangle. */
+	@Test
+	public void liveSwapBoundsStayNativeAcrossSamePointerSwitchAndEntryRebuild() throws Exception
+	{
+		for (boolean opensLeft : new boolean[]{true, false})
+		{
+			int rootX = opensLeft ? 683 : 2;
+			int childX = opensLeft ? 552 : rootX + 253;
+			NativeModel model = new NativeModel(rootX, 420, 253, 10, false, 0,
+				entry -> entry == 6 || entry == 7);
+			model.rootEntryOptions[model.rows - 1 - 2] = "Swap shift-click";
+			model.rootEntryOptions[model.rows - 1 - 3] = "Swap left-click";
+			for (int row : new int[]{2, 3})
+			{
+				NativeMenu child = model.childAtRow(row);
+				MenuEntry[] actions = new MenuEntry[7];
+				for (int i = 0; i < actions.length; i++)
+				{
+					actions[i] = entry(new String[]{"Action " + row + "." + i}, 0, null);
+				}
+				child.entries = actions;
+				child.setBounds(childX, 465, 131, 127);
+			}
+			model.open = model.childAtRow(3);
+			model.live = new Point(rootX + 20, 490);
+			Harness harness = harness(model);
+			assertEquals("left child opensLeft=" + opensLeft, Shown.NATIVE, harness.frame().shown);
+			model.open = model.childAtRow(2); // native changes child without moving the pointer
+			assertEquals("shift child opensLeft=" + opensLeft, Shown.NATIVE, harness.frame().shown);
+			int shiftEntry = model.rows - 1 - 2;
+			model.root.entries[shiftEntry] = entry(model.rootEntryOptions, shiftEntry, model.childAtRow(2));
+			assertEquals("rebuilt parent opensLeft=" + opensLeft, Shown.NATIVE, harness.frame().shown);
+			assertEquals("three genuinely ambiguous frames opensLeft=" + opensLeft, 3L,
+				outcome(harness, MenuOverlay.SubmenuOutcome.FALLBACK_AMBIGUOUS));
+		}
+	}
+
+	// ---- Visually equivalent alternatives ----
+
+	/**
+	 * Identical Swap submenus (7 rows, 127px): Menu Entry Swapper's case when left-click and
+	 * shift-click currently use the same op, so both leave out the same one. Usually they differ;
+	 * see {@link #MEDALLION_OPS}.
+	 */
+	private static final String[] SWAP_ACTIONS = {"Wear", "Fill", "Empty", "Check", "Drop", "Examine", "Use"};
+	private static final String SWAP_TARGET = "<col=ff9040>Rune pouch";
+	private static final int SWAP_SHIFT_ROW = 2;
+	private static final int SWAP_LEFT_ROW = 3;
+
+	/**
+	 * The live trace's root (683,420 253x10 rows) with its two Swap rows. Each Swap child has
+	 * the same ops (both modes leaving out the same one), the item as the parent's target, and
+	 * its own click callbacks. Neither child has bounds yet.
+	 */
+	private static NativeModel swapModel(boolean opensLeft, int[] clicks)
+	{
+		int rootX = opensLeft ? 683 : 2;
+		NativeModel model = new NativeModel(rootX, 420, 253, 10, false, 0, entry -> entry == 6 || entry == 7);
+		for (int row : new int[]{SWAP_SHIFT_ROW, SWAP_LEFT_ROW})
+		{
+			int entryIndex = model.rows - 1 - row;
+			String option = row == SWAP_SHIFT_ROW ? "Swap shift-click" : "Swap left-click";
+			model.rootEntryOptions[entryIndex] = option;
+			NativeMenu child = model.childAtRow(row);
+			child.entries = actions(SWAP_ACTIONS, e -> clicks[0]++);
+			model.root.entries[entryIndex] = actionEntry(option, SWAP_TARGET, MenuAction.RUNELITE, child,
+				e -> clicks[0]++);
+		}
+		model.live = new Point(rootX + 20, 490); // over root row 3, Swap left-click
+		return model;
+	}
+
+	/** Entries bottom-up, so {@code options[0]} is the top row; every entry shares {@code callback}. */
+	private static MenuEntry[] actions(String[] options, java.util.function.Consumer<MenuEntry> callback)
+	{
+		MenuEntry[] entries = new MenuEntry[options.length];
+		for (int i = 0; i < options.length; i++)
+		{
+			entries[options.length - 1 - i] = actionEntry(options[i], "", MenuAction.RUNELITE, null, callback);
+		}
+		return entries;
+	}
+
+	/** Where native places either Swap child in the live trace: clamped to the canvas bottom. */
+	private static void placeSwapChild(NativeModel model, int row, boolean opensLeft)
+	{
+		model.childAtRow(row).setBounds(opensLeft ? 552 : model.root.x + model.root.width, 465, 131, 127);
+	}
+
+	/**
+	 * The proven frame (the closed shift-click child retained at a distinct rectangle on the same
+	 * side, so the pixels identify the left-click child) next to the ambiguous one (the
+	 * shift-click child reopened at the very same rectangle, as at 23:20:05). The root's arrow
+	 * side follows retained geometry, so it is the same in both frames.
+	 */
+	private Frame[] provenThenShared(NativeModel model, Harness harness, boolean opensLeft) throws Exception
+	{
+		placeSwapChild(model, SWAP_LEFT_ROW, opensLeft);
+		placeSwapChild(model, SWAP_SHIFT_ROW, opensLeft);
+		model.childAtRow(SWAP_SHIFT_ROW).y = 280;
+		model.open = model.childAtRow(SWAP_LEFT_ROW);
+		Frame proven = harness.frame();
+		placeSwapChild(model, SWAP_SHIFT_ROW, opensLeft);
+		model.open = model.childAtRow(SWAP_SHIFT_ROW);
+		Frame shared = harness.frame();
+		return new Frame[]{proven, shared};
+	}
+
+	@Test
+	public void liveSwapSiblingsSharingARectangleAreThemedWhenTheyRenderIdentically() throws Exception
+	{
+		for (boolean opensLeft : new boolean[]{true, false})
+		{
+			String context = "opensLeft=" + opensLeft;
+			int[] clicks = new int[1];
+			NativeModel model = swapModel(opensLeft, clicks);
+			assertNotEquals(context + ": the siblings have different callbacks",
+				model.childAtRow(SWAP_SHIFT_ROW).entries[0].onClick(),
+				model.childAtRow(SWAP_LEFT_ROW).entries[0].onClick());
+			Harness harness = harness(model);
+			Frame[] frames = provenThenShared(model, harness, opensLeft);
+			assertThemedNativeState(context + " proven", frames[0], model);
+			assertEquals(1L, outcome(harness, MenuOverlay.SubmenuOutcome.READY_WITH_CHILD));
+			assertThemedNativeState(context + " shared rectangle", frames[1], model);
+			assertEquals(1L, outcome(harness, MenuOverlay.SubmenuOutcome.READY_WITH_EQUIVALENT_CHILD));
+			assertTrue(context + ": the ambiguous frame shows exactly what the proven frame showed",
+				sameImage(frames[0].output, frames[1].output));
+
+			// Native switches back without the pointer moving: the public state is unchanged.
+			model.open = model.childAtRow(SWAP_LEFT_ROW);
+			Frame back = harness.frame();
+			assertThemedNativeState(context + " switched back", back, model);
+			assertTrue(context, sameImage(frames[0].output, back.output));
+
+			// Menu Entry Swapper rebuilds an equivalent parent entry with a new callback.
+			int shiftEntry = model.rows - 1 - SWAP_SHIFT_ROW;
+			model.root.entries[shiftEntry] = actionEntry("Swap shift-click", SWAP_TARGET, MenuAction.RUNELITE,
+				model.childAtRow(SWAP_SHIFT_ROW), e -> clicks[0]++);
+			model.open = model.childAtRow(SWAP_SHIFT_ROW);
+			Frame rebuilt = harness.frame();
+			assertThemedNativeState(context + " rebuilt parent", rebuilt, model);
+			assertTrue(context, sameImage(frames[0].output, rebuilt.output));
+
+			assertEquals(context + ": no frame fell back", 0L,
+				outcome(harness, MenuOverlay.SubmenuOutcome.FALLBACK_AMBIGUOUS));
+			assertEquals(context + ": three equivalent frames", 3L,
+				outcome(harness, MenuOverlay.SubmenuOutcome.READY_WITH_EQUIVALENT_CHILD));
+			assertEquals(context + ": rendering never runs a click callback", 0, clicks[0]);
+		}
+	}
+
+	@Test
+	public void rootHoverFollowsThePointerNeverTheChildNativeDrew() throws Exception
+	{
+		for (boolean opensLeft : new boolean[]{true, false})
+		{
+			NativeModel model = swapModel(opensLeft, new int[1]);
+			placeSwapChild(model, SWAP_LEFT_ROW, opensLeft);
+			placeSwapChild(model, SWAP_SHIFT_ROW, opensLeft);
+			Harness harness = harness(model);
+			int rootX = model.root.x;
+			Point[] pointers = {
+				new Point(rootX + 20, 439 + 15 * SWAP_SHIFT_ROW + 7), // Swap shift-click row
+				new Point(rootX + 20, 439 + 15 * SWAP_LEFT_ROW + 7), // Swap left-click row
+				new Point(opensLeft ? 600 : 300, 540), // inside the shared child panel
+			};
+			BufferedImage[] byPointer = new BufferedImage[pointers.length];
+			for (int p = 0; p < pointers.length; p++)
+			{
+				model.live = pointers[p];
+				BufferedImage first = null;
+				for (int row : new int[]{SWAP_SHIFT_ROW, SWAP_LEFT_ROW})
+				{
+					model.open = model.childAtRow(row);
+					Frame frame = harness.frame();
+					String context = "opensLeft=" + opensLeft + " pointer=" + p + " open row=" + row;
+					assertThemedNativeState(context, frame, model);
+					if (first == null)
+					{
+						first = frame.output;
+					}
+					else
+					{
+						assertTrue(context + ": which child is open never changes a pixel",
+							sameImage(first, frame.output));
+					}
+				}
+				byPointer[p] = first;
+			}
+			assertFalse("the shift-click row highlights under the pointer", sameImage(byPointer[0], byPointer[1]));
+			assertFalse("a pointer in the child highlights no root row", sameImage(byPointer[1], byPointer[2]));
+			assertEquals(0L, outcome(harness, MenuOverlay.SubmenuOutcome.FALLBACK_AMBIGUOUS));
+		}
+	}
+
+	private interface SwapVariant
+	{
+		void apply(NativeModel model, int[] clicks);
+	}
+
+	@Test
+	public void sharedRectangleWithAnyVisibleDifferenceStaysNative() throws Exception
+	{
+		java.util.Map<String, SwapVariant> variants = new java.util.LinkedHashMap<>();
+		variants.put("different entry", (model, clicks) ->
+			model.childAtRow(SWAP_SHIFT_ROW).entries[2] = actionEntry("Destroy", "", MenuAction.RUNELITE, null, null));
+		variants.put("Reset in place of an op", (model, clicks) ->
+			model.childAtRow(SWAP_SHIFT_ROW).entries[0] = actionEntry("Reset", "", MenuAction.RUNELITE, null, null));
+		variants.put("extra Reset row", (model, clicks) ->
+		{
+			NativeMenu shift = model.childAtRow(SWAP_SHIFT_ROW);
+			MenuEntry[] longer = Arrays.copyOf(shift.entries, shift.entries.length + 1);
+			System.arraycopy(longer, 0, longer, 1, shift.entries.length);
+			longer[0] = actionEntry("Reset", "", MenuAction.RUNELITE, null, null);
+			shift.entries = longer;
+		});
+		variants.put("entry order", (model, clicks) ->
+		{
+			MenuEntry[] entries = model.childAtRow(SWAP_SHIFT_ROW).entries;
+			MenuEntry top = entries[entries.length - 1];
+			entries[entries.length - 1] = entries[entries.length - 2];
+			entries[entries.length - 2] = top;
+		});
+		variants.put("colour tag", (model, clicks) ->
+			model.childAtRow(SWAP_SHIFT_ROW).entries[3] = actionEntry("<col=ff0000>Check", "", MenuAction.RUNELITE, null, null));
+		variants.put("icon tag", (model, clicks) ->
+			model.childAtRow(SWAP_SHIFT_ROW).entries[3] = actionEntry("<img=1>Check", "", MenuAction.RUNELITE, null, null));
+		variants.put("target text", (model, clicks) ->
+			model.childAtRow(SWAP_SHIFT_ROW).entries[3] = actionEntry("Check", "Rune pouch", MenuAction.RUNELITE, null, null));
+		variants.put("target kind", (model, clicks) ->
+		{
+			model.childAtRow(SWAP_SHIFT_ROW).entries[3] = actionEntry("Check", "Rune pouch",
+				MenuAction.GAME_OBJECT_FIRST_OPTION, null, null);
+			model.childAtRow(SWAP_LEFT_ROW).entries[3] = actionEntry("Check", "Rune pouch", MenuAction.RUNELITE, null, null);
+		});
+		variants.put("header", (model, clicks) ->
+		{
+			int entry = model.rows - 1 - SWAP_SHIFT_ROW;
+			model.root.entries[entry] = actionEntry("Swap shift-click", "<col=ff9040>Rune pouch (full)",
+				MenuAction.RUNELITE, model.childAtRow(SWAP_SHIFT_ROW), null);
+		});
+		variants.put("submenu arrow", (model, clicks) ->
+		{
+			NativeMenu dormant = new NativeMenu(100);
+			dormant.entries = actions(new String[]{"Deeper"}, null);
+			model.childAtRow(SWAP_SHIFT_ROW).entries[3] = actionEntry("Check", "", MenuAction.RUNELITE, dormant, null);
+		});
+		variants.put("submenu arrow side", (model, clicks) ->
+		{
+			// Both rows open a closed grandchild, one to each side (only possible above the root).
+			for (int row : new int[]{SWAP_SHIFT_ROW, SWAP_LEFT_ROW})
+			{
+				NativeMenu grandchild = new NativeMenu(100);
+				grandchild.entries = actions(new String[]{"Deeper"}, null);
+				grandchild.setBounds(row == SWAP_SHIFT_ROW ? 452 : 700, 300, 100, 37);
+				model.childAtRow(row).entries[3] = actionEntry("Check", "", MenuAction.RUNELITE, grandchild, null);
+			}
+		});
+		for (java.util.Map.Entry<String, SwapVariant> variant : variants.entrySet())
+		{
+			for (boolean opensLeft : new boolean[]{true, false})
+			{
+				if (variant.getKey().equals("submenu arrow side") && !opensLeft)
+				{
+					continue; // the grandchild positions above assume the left-opening root
+				}
+				String context = variant.getKey() + " opensLeft=" + opensLeft;
+				int[] clicks = new int[1];
+				NativeModel model = swapModel(opensLeft, clicks);
+				variant.getValue().apply(model, clicks);
+				placeSwapChild(model, SWAP_LEFT_ROW, opensLeft);
+				placeSwapChild(model, SWAP_SHIFT_ROW, opensLeft);
+				Harness harness = harness(model);
+				for (int row : new int[]{SWAP_SHIFT_ROW, SWAP_LEFT_ROW})
+				{
+					model.open = model.childAtRow(row);
+					assertEquals(context + " open row=" + row + ": no wrong submenu is ever shown",
+						Shown.NATIVE, harness.frame().shown);
+				}
+				assertEquals(context, 2L, outcome(harness, MenuOverlay.SubmenuOutcome.FALLBACK_AMBIGUOUS));
+				assertEquals(context, 0L, outcome(harness, MenuOverlay.SubmenuOutcome.READY_WITH_EQUIVALENT_CHILD));
+			}
+		}
+	}
+
+	@Test
+	public void equivalentSiblingsKeepEveryOpacityAndStyleSetting() throws Exception
+	{
+		for (boolean opensLeft : new boolean[]{true, false})
+		{
+			BufferedImage previous = null;
+			for (int opacity : new int[]{0, 50, 100})
+			{
+				String context = "opacity=" + opacity + " opensLeft=" + opensLeft;
+				NativeModel model = swapModel(opensLeft, new int[1]);
+				Harness harness = harness(model);
+				Theme base = harness.themes.effectiveTheme();
+				harness.themes.setWorking(base.withOpacity(opacity).withHoverOpacity(opacity));
+				Frame[] frames = provenThenShared(model, harness, opensLeft);
+				assertEquals(context, Shown.THEMED, frames[0].shown);
+				assertEquals(context, Shown.THEMED, frames[1].shown);
+				assertEquals(context, 1L, outcome(harness, MenuOverlay.SubmenuOutcome.READY_WITH_EQUIVALENT_CHILD));
+				assertTrue(context + ": same pixels as the proven frame", sameImage(frames[0].output, frames[1].output));
+				if (previous != null)
+				{
+					assertFalse(context + ": the opacity setting is applied", sameImage(previous, frames[1].output));
+				}
+				previous = frames[1].output;
+			}
+			NativeModel model = swapModel(opensLeft, new int[1]);
+			Harness harness = harness(model);
+			harness.config.textOffsetX = harness.config.textOffsetX + 4;
+			Frame[] frames = provenThenShared(model, harness, opensLeft);
+			assertThemedNativeState("text offset opensLeft=" + opensLeft, frames[1], model);
+			assertTrue(sameImage(frames[0].output, frames[1].output));
+		}
+	}
+
+	/** Swap children at one rectangle, each opening a grandchild at one rectangle to its left. */
+	private static NativeModel nestedSwapModel(String[] shiftGrandchildOps)
+	{
+		NativeModel model = swapModel(true, new int[1]);
+		for (int row : new int[]{SWAP_SHIFT_ROW, SWAP_LEFT_ROW})
+		{
+			placeSwapChild(model, row, true);
+			NativeMenu grandchild = new NativeMenu(120);
+			grandchild.entries = actions(row == SWAP_SHIFT_ROW ? shiftGrandchildOps
+				: new String[]{"Inventory", "Equipment", "Bank"}, e -> { });
+			grandchild.setBounds(432, 465, 120, 67);
+			model.childAtRow(row).entries[3] = actionEntry("Check", "", MenuAction.RUNELITE, grandchild,
+				e -> { });
+			model.grandchildren.add(grandchild);
+		}
+		model.live = new Point(470, 500); // inside the grandchild
+		return model;
+	}
+
+	@Test
+	public void nestedEquivalentChainsAreThemedAndNestedDifferencesStayNative() throws Exception
+	{
+		NativeModel model = nestedSwapModel(new String[]{"Inventory", "Equipment", "Bank"});
+		Harness harness = harness(model);
+		BufferedImage first = null;
+		for (int row : new int[]{SWAP_SHIFT_ROW, SWAP_LEFT_ROW})
+		{
+			model.open = model.childAtRow(row);
+			model.openGrandchild = model.childAtRow(row).entries[3].getSubMenu() == null ? null
+				: (NativeMenu) model.childAtRow(row).entries[3].getSubMenu();
+			Frame frame = harness.frame();
+			assertThemedNativeState("nested open row=" + row, frame, model);
+			first = first == null ? frame.output : first;
+			assertTrue("nested open row=" + row, sameImage(first, frame.output));
+		}
+		assertEquals(2L, outcome(harness, MenuOverlay.SubmenuOutcome.READY_WITH_EQUIVALENT_CHILD));
+
+		NativeModel different = nestedSwapModel(new String[]{"Inventory", "Equipment", "Bank-all"});
+		Harness differentHarness = harness(different);
+		different.open = different.childAtRow(SWAP_SHIFT_ROW);
+		different.openGrandchild = (NativeMenu) different.childAtRow(SWAP_SHIFT_ROW).entries[3].getSubMenu();
+		assertEquals("grandchild contents differ", Shown.NATIVE, differentHarness.frame().shown);
+		assertEquals(1L, outcome(differentHarness, MenuOverlay.SubmenuOutcome.FALLBACK_AMBIGUOUS));
+	}
+
+	@Test
+	public void equivalentSiblingsThatCouldHideAGrandchildStayNative() throws Exception
+	{
+		NativeModel model = swapModel(true, new int[1]);
+		for (int row : new int[]{SWAP_SHIFT_ROW, SWAP_LEFT_ROW})
+		{
+			placeSwapChild(model, row, true);
+			NativeMenu grandchild = new NativeMenu(100);
+			grandchild.entries = actions(new String[]{"Hidden"}, null);
+			grandchild.setBounds(700, 470, 100, 37); // entirely over the root: drawn or not, no evidence
+			model.childAtRow(row).entries[3] = actionEntry("Check", "", MenuAction.RUNELITE, grandchild, null);
+		}
+		model.open = model.childAtRow(SWAP_SHIFT_ROW);
+		Harness harness = harness(model);
+		assertEquals(Shown.NATIVE, harness.frame().shown);
+		assertEquals(1L, outcome(harness, MenuOverlay.SubmenuOutcome.FALLBACK_AMBIGUOUS));
+	}
+
+	@Test
+	public void scrolledEquivalentSiblingsAreThemedOnlyWhenAttachedToTheirRows() throws Exception
+	{
+		for (int childY : new int[]{300, 400})
+		{
+			NativeModel model = longLoggedRoot(0);
+			for (int row : new int[]{20, 21})
+			{
+				int entry = model.rows - 1 - row;
+				NativeMenu child = model.childAtRow(row);
+				child.entries = actions(new String[]{"Wear", "Fill", "Empty", "Check", "Drop"}, e -> { });
+				model.root.entries[entry] = actionEntry(row == 20 ? "Swap shift-click" : "Swap left-click",
+					SWAP_TARGET, MenuAction.RUNELITE, child, e -> { });
+				child.setBounds(646, childY, 220, NativeModel.nativeHeight(5));
+			}
+			model.open = model.childAtRow(21);
+			model.live = new Point(549, 340);
+			Harness harness = harness(model);
+			Frame frame = harness.frame();
+			if (childY == 300)
+			{
+				assertThemedNativeState("attached to both parent rows", frame, model);
+				assertEquals(1L, outcome(harness, MenuOverlay.SubmenuOutcome.READY_WITH_EQUIVALENT_CHILD));
+			}
+			else
+			{
+				assertEquals("detached: no single child is proven at that position", Shown.NATIVE, frame.shown);
+				assertEquals(1L, outcome(harness, MenuOverlay.SubmenuOutcome.FALLBACK_SCROLLABLE));
+			}
+		}
+	}
+
+	// ---- Screen-edge clamping (Drakan's medallion, live 00:10:09) ----
+
+	/**
+	 * The medallion's ops. Menu Entry Swapper lists every op in both Swap submenus except the
+	 * one currently set for that mode, so the two submenus have equal row counts (equal
+	 * rectangles at a clamped edge) but, unless both modes use the same op, different rows.
+	 */
+	private static final String[] MEDALLION_OPS = {"Wear", "Ver Sinhaza", "Darkmeyer", "Slepe", "Lab", "Rub",
+		"Drop", "Examine"};
+
+	private static String[] without(String[] ops, String omitted)
+	{
+		List<String> kept = new ArrayList<>(Arrays.asList(ops));
+		assertTrue(kept.remove(omitted));
+		return kept.toArray(new String[0]);
+	}
+
+	/**
+	 * The live root layout: Swap shift-click is entry 2 and Swap left-click entry 3 (rows 7 and 6
+	 * of a 10-row root, rows 5 and 4 of an 8-row one). Both children are 131px wide, the width
+	 * native gave them, and are positioned only by the model's native open step.
+	 */
+	private static NativeModel medallionModel(int rootX, int rootY, int rootRows, String[] ops,
+		String leftOmits, String shiftOmits)
+	{
+		NativeModel model = new NativeModel(rootX, rootY, 253, rootRows, false, 0, entry -> entry == 2 || entry == 3);
+		for (int entry : new int[]{2, 3})
+		{
+			boolean shift = entry == 2;
+			NativeMenu child = new NativeMenu(131);
+			child.entries = actions(without(ops, shift ? shiftOmits : leftOmits), e -> { });
+			model.children.set(model.children.indexOf(model.childByEntry[entry]), child);
+			model.childByEntry[entry] = child;
+			model.rootEntryOptions[entry] = shift ? "Swap shift-click" : "Swap left-click";
+			model.root.entries[entry] = actionEntry(model.rootEntryOptions[entry], "<col=ff9040>Drakan's medallion",
+				MenuAction.RUNELITE, child, e -> { });
+		}
+		return model;
+	}
+
+	/** Hovers root {@code row} for the native open delay, as a player moving between the Swap rows. */
+	private static void hoverRow(NativeModel model, int row)
+	{
+		model.live = new Point(model.root.x + 30, model.root.y + MenuRenderer.HEADER_HEIGHT + row * MenuRenderer.ROW_HEIGHT + 7);
+		for (int i = 0; i < OPEN_DELAY_CYCLES; i++)
+		{
+			model.cycle();
+		}
+	}
+
+	@Test
+	public void screenEdgeMatrixIsolatesVerticalClampingAsTheTrigger() throws Exception
+	{
+		int tallHeight = NativeModel.nativeHeight(10);
+		int shortHeight = NativeModel.nativeHeight(8);
+		// {label, rootX, rootY, rootRows}: 696 opens left (as live), 400 opens right, 737 puts the
+		// root against the right edge as well.
+		Object[][] positions = {
+			{"middle right tall", 400, 100, 10},
+			{"bottom right tall", 400, CANVAS_HEIGHT - tallHeight, 10},
+			{"middle left tall", 696, 100, 10},
+			{"bottom left tall (live)", 696, CANVAS_HEIGHT - tallHeight, 10},
+			{"bottom left short", 696, CANVAS_HEIGHT - shortHeight, 8},
+			{"bottom corner tall", CANVAS_WIDTH - 253, CANVAS_HEIGHT - tallHeight, 10},
+			{"middle left short", 696, 200, 8},
+		};
+		List<String> sharedCells = new ArrayList<>();
+		List<String> identifiedCells = new ArrayList<>();
+		for (Object[] position : positions)
+		{
+			for (boolean sameOps : new boolean[]{false, true})
+			{
+				for (boolean oneRowChildren : new boolean[]{false, true})
+				{
+					String[] ops = oneRowChildren ? new String[]{"Wear", "Drop"} : MEDALLION_OPS;
+					String leftOmits = "Wear";
+					String shiftOmits = sameOps ? "Wear" : "Drop";
+					if (oneRowChildren && sameOps)
+					{
+						continue; // nothing left to compare
+					}
+					String context = position[0] + (sameOps ? " same ops" : " different ops")
+						+ (oneRowChildren ? " one-row children" : " seven-row children");
+					NativeModel model = medallionModel((int) position[1], (int) position[2], (int) position[3],
+						ops, leftOmits, shiftOmits);
+					int rows = (int) position[3];
+					int leftRow = rows - 1 - 3;
+					int shiftRow = rows - 1 - 2;
+					Harness harness = harness(model);
+
+					hoverRow(model, leftRow);
+					NativeMenu left = model.childAtRow(leftRow);
+					assertEquals(context, left, model.open);
+					assertThemedNativeState(context + ": first open, sibling dormant", harness.frame(), model);
+
+					hoverRow(model, shiftRow);
+					NativeMenu shift = model.childAtRow(shiftRow);
+					assertEquals(context, shift, model.open);
+					Rectangle leftBounds = left.bounds();
+					boolean sharedRect = leftBounds.equals(shift.bounds());
+					// Native aligns a child's header with its parent row: naturalY = rowTop - 19.
+					int leftNaturalY = model.root.y + leftRow * MenuRenderer.ROW_HEIGHT;
+					int shiftNaturalY = model.root.y + shiftRow * MenuRenderer.ROW_HEIGHT;
+					boolean bothClamped = leftNaturalY + leftBounds.height > CANVAS_HEIGHT
+						&& shiftNaturalY + shift.bounds().height > CANVAS_HEIGHT;
+					assertEquals(context + ": siblings share a rectangle exactly when both are clamped to the bottom",
+						bothClamped, sharedRect);
+					boolean opensLeft = leftBounds.x < model.root.x;
+					assertEquals(context + ": opening side", (int) position[1] != 400, opensLeft);
+
+					// Rapid switching: shift, left, shift, then into the open child's panel.
+					for (int step = 0; step < 4; step++)
+					{
+						if (step == 1)
+						{
+							hoverRow(model, leftRow);
+						}
+						else if (step == 2)
+						{
+							hoverRow(model, shiftRow);
+						}
+						else if (step == 3)
+						{
+							Rectangle open = model.open.bounds();
+							model.live = new Point(open.x + open.width / 2, open.y + open.height - 10);
+							model.cycle();
+						}
+						Rectangle[] before = {model.root.bounds(), left.bounds(), shift.bounds()};
+						Frame frame = harness.frame();
+						assertArrayEquals(context + ": rendering never moves a native menu",
+							before, new Rectangle[]{model.root.bounds(), left.bounds(), shift.bounds()});
+						String stepContext = context + " step " + step;
+						assertThemedNativeState(stepContext, frame, model);
+						if (sharedRect && !sameOps)
+						{
+							// Genuinely different rows at one rectangle: themed with the open child's
+							// rows, exactly as when the probe resolves it alone.
+							NativeMenu closed = model.open == left ? shift : left;
+							assertTrue(stepContext + ": the open child's content, not its sibling's",
+								sameImage(resolvedTwin(harness, closed).output, frame.output));
+						}
+					}
+					if (sharedRect)
+					{
+						sharedCells.add(context);
+					}
+					if (sharedRect && !sameOps)
+					{
+						identifiedCells.add(context);
+					}
+					assertEquals(context, 0L, outcome(harness, MenuOverlay.SubmenuOutcome.FALLBACK_AMBIGUOUS));
+					assertEquals(context, sharedRect && sameOps ? 4L : 0L,
+						outcome(harness, MenuOverlay.SubmenuOutcome.READY_WITH_EQUIVALENT_CHILD));
+					assertEquals(context, sharedRect && !sameOps ? 4L : 0L,
+						outcome(harness, MenuOverlay.SubmenuOutcome.READY_WITH_NATIVE_IDENTIFIED_CHILD));
+				}
+			}
+		}
+		// Only the bottom-clamped seven-row cells share a rectangle, opening left or right; the
+		// ones whose rows differ are told apart by the native pixels.
+		assertEquals(Arrays.asList(
+			"bottom right tall different ops seven-row children", "bottom right tall same ops seven-row children",
+			"bottom left tall (live) different ops seven-row children", "bottom left tall (live) same ops seven-row children",
+			"bottom left short different ops seven-row children", "bottom left short same ops seven-row children",
+			"bottom corner tall different ops seven-row children", "bottom corner tall same ops seven-row children"),
+			sharedCells);
+		assertEquals(Arrays.asList(
+			"bottom right tall different ops seven-row children", "bottom left tall (live) different ops seven-row children",
+			"bottom left short different ops seven-row children", "bottom corner tall different ops seven-row children"),
+			identifiedCells);
+	}
+
+	/**
+	 * The same frame through a fresh overlay with the same theme and settings, but with the closed
+	 * sibling moved off the shared rectangle (same side, so the root's arrows are unchanged): the
+	 * probe then resolves the open child alone, so this is the image the open child must get.
+	 */
+	private Frame resolvedTwin(Harness original, NativeMenu closed) throws Exception
+	{
+		int y = closed.y;
+		closed.y = 280;
+		try
+		{
+			Harness twin = harness(original.model);
+			twin.themes.setWorking(original.themes.effectiveTheme());
+			twin.config.textOffsetX = original.config.textOffsetX;
+			twin.config.showHitRows = original.config.showHitRows;
+			Frame frame = twin.frame();
+			assertEquals("the twin frame resolves the open child alone", 1L,
+				outcome(twin, MenuOverlay.SubmenuOutcome.READY_WITH_CHILD));
+			return frame;
+		}
+		finally
+		{
+			closed.y = y;
+		}
+	}
+
+	/** The diagnostics name the clamping and the first differing row for the live frame. */
+	@Test
+	public void diagnosticsExplainTheLiveScreenEdgeFallback() throws Exception
+	{
+		NativeModel model = medallionModel(696, CANVAS_HEIGHT - NativeModel.nativeHeight(10), 10,
+			MEDALLION_OPS, "Wear", "Drop");
+		hoverRow(model, 6);
+		hoverRow(model, 7);
+		SubmenuTree tree = SubmenuTree.capture(model.root);
+		NativeSubmenuProbe.Result result = NativeSubmenuProbe.probePixels(model.pixels, CANVAS_WIDTH,
+			CANVAS_HEIGHT, tree, model::nativeDraw);
+		ScrollableMenuViewport viewport = ScrollableMenuViewport.capture(model.root.bounds(), 10,
+			CANVAS_WIDTH, CANVAS_HEIGHT, false, 0);
+		StringBuilder why = new StringBuilder();
+		assertEquals(null, MenuOverlay.visuallyEquivalentAlternatives(result, tree, viewport, model.live, 0, why));
+		assertEquals(ExactCoverageResolver.State.AMBIGUOUS, result.exact.state);
+		assertEquals(2, result.exact.alternatives.length);
+		assertEquals(-1, result.exact.hiddenCandidate);
+		// Candidate #0 is entry 2 (shift-click, omits Drop), #1 entry 3 (left-click, omits Wear).
+		assertEquals("chains [0] and [1] differ: ROWS depth=1 row=0 option 'Wear' vs 'Ver Sinhaza'", why.toString());
+		String geometry = MenuOverlay.describeGeometry(tree, result, viewport, CANVAS_WIDTH, CANVAS_HEIGHT);
+		assertTrue(geometry, geometry.contains("root=696,420,253x172 rootEdges=bottom"));
+		assertTrue(geometry, geometry.contains("[#0 parent=root row=7 'Swap shift-click' at=565,465,131x127 side=left"
+			+ " rows=7 naturalY=525 clampedBottom edges=bottom covered sameRectAs=#1]"));
+		assertTrue(geometry, geometry.contains("[#1 parent=root row=6 'Swap left-click' at=565,465,131x127 side=left"
+			+ " rows=7 naturalY=510 clampedBottom edges=bottom covered sameRectAs=#0]"));
+		assertTrue(MenuOverlay.describePointer(tree, viewport, model.live),
+			MenuOverlay.describePointer(tree, viewport, model.live).contains("rootRow=7 'Swap shift-click'"));
+	}
+
+	@Test
+	public void scrolledRootChildrenClampedAtTheViewportBottom() throws Exception
+	{
+		for (boolean sameRows : new boolean[]{false, true})
+		{
+			NativeModel model = longLoggedRoot(0);
+			// Rows 36 and 37 are the last visible rows; their 5-row children clamp to y=495.
+			for (int row : new int[]{36, 37})
+			{
+				int entry = model.rows - 1 - row;
+				NativeMenu child = new NativeMenu(220);
+				child.entries = actions(sameRows || row == 36 ? new String[]{"Wear", "Fill", "Empty", "Check", "Drop"}
+					: new String[]{"Wear", "Fill", "Empty", "Check", "Use"}, e -> { });
+				model.children.set(model.children.indexOf(model.childByEntry[entry]), child);
+				model.childByEntry[entry] = child;
+				model.root.entries[entry] = actionEntry(row == 36 ? "Swap left-click" : "Swap shift-click",
+					SWAP_TARGET, MenuAction.RUNELITE, child, e -> { });
+			}
+			Harness harness = harness(model);
+			hoverRow(model, 36);
+			assertThemedNativeState("first open", harness.frame(), model);
+			hoverRow(model, 37);
+			assertEquals(model.childAtRow(36).bounds(), model.childAtRow(37).bounds());
+			assertEquals(495, model.childAtRow(37).bounds().y);
+			Frame frame = harness.frame();
+			if (sameRows)
+			{
+				assertThemedNativeState("equivalent, attached to both rows", frame, model);
+				assertEquals(1L, outcome(harness, MenuOverlay.SubmenuOutcome.READY_WITH_EQUIVALENT_CHILD));
+			}
+			else
+			{
+				// The row-36 child was proven alone on first open, so its native image excludes it.
+				assertThemedNativeState("different rows, identified natively", frame, model);
+				assertEquals(1L, outcome(harness, MenuOverlay.SubmenuOutcome.READY_WITH_NATIVE_IDENTIFIED_CHILD));
+				assertEquals(0L, outcome(harness, MenuOverlay.SubmenuOutcome.FALLBACK_AMBIGUOUS));
+				assertTrue("the row-37 child's content", sameImage(
+					resolvedTwin(harness, model.childAtRow(36)).output, frame.output));
+			}
+		}
+	}
+
+	// ---- Native pixel identification at the live screen edge (canvas 592, children 565,465,131x127) ----
+
+	private static final Rectangle LIVE_SHARED = new Rectangle(565, 465, 131, 127);
+
+	private static NativeModel liveMedallion()
+	{
+		return medallionModel(696, CANVAS_HEIGHT - NativeModel.nativeHeight(10), 10, MEDALLION_OPS, "Wear", "Drop");
+	}
+
+	private static Point onRootRow(NativeModel model, int row)
+	{
+		return new Point(model.root.x + 30, model.root.y + MenuRenderer.HEADER_HEIGHT + row * MenuRenderer.ROW_HEIGHT + 7);
+	}
+
+	/** Whether the native draw paints a yellow (hovered) row in {@code menu}; the framebuffer is restored. */
+	private static boolean nativeHoverIn(NativeModel model, NativeMenu menu)
+	{
+		int[] saved = model.pixels.clone();
+		model.nativeDraw();
+		boolean yellow = false;
+		Rectangle r = menu.bounds();
+		for (int y = r.y; y < r.y + r.height; y++)
+		{
+			for (int x = r.x; x < r.x + r.width; x++)
+			{
+				yellow |= model.pixels[y * CANVAS_WIDTH + x] == 0xFFFFFF00;
+			}
+		}
+		System.arraycopy(saved, 0, model.pixels, 0, saved.length);
+		return yellow;
+	}
+
+	@Test
+	public void liveScreenEdgeSiblingsAreIdentifiedByTheNativeDraw() throws Exception
+	{
+		for (int opacity : new int[]{100, 50, 0})
+		{
+			String context = "opacity=" + opacity;
+			NativeModel model = liveMedallion();
+			Harness harness = harness(model);
+			harness.themes.setWorking(harness.themes.effectiveTheme().withOpacity(opacity).withHoverOpacity(opacity));
+			NativeMenu left = model.childAtRow(6);
+			NativeMenu shift = model.childAtRow(7);
+
+			hoverRow(model, 6);
+			assertThemedNativeState(context + ": first open, sibling dormant", harness.frame(), model);
+			assertEquals(LIVE_SHARED, left.bounds());
+			assertEquals(1L, outcome(harness, MenuOverlay.SubmenuOutcome.READY_WITH_CHILD));
+
+			// The open delay: one cycle over the shift row, native still draws the left child.
+			model.live = onRootRow(model, 7);
+			model.cycle();
+			assertEquals(left, model.open);
+			Frame pending = harness.frame();
+			assertThemedNativeState(context + ": pending, sibling still dormant", pending, model);
+
+			model.cycle();
+			assertEquals(shift, model.open);
+			assertEquals(LIVE_SHARED, shift.bounds());
+			Frame opened = harness.frame();
+			assertThemedNativeState(context + ": shift opened at the shared rectangle", opened, model);
+			assertTrue(context + ": the shift child's rows", sameImage(resolvedTwin(harness, left).output, opened.output));
+			assertFalse(context + ": the two children's themed images differ", sameImage(pending.output, opened.output));
+
+			// The open delay back: the pointer is over the left row, native still draws shift.
+			model.live = onRootRow(model, 6);
+			model.cycle();
+			assertEquals(shift, model.open);
+			Frame delayed = harness.frame();
+			assertThemedNativeState(context + ": delayed", delayed, model);
+			assertTrue(context + ": still the shift child, hover on the left row",
+				sameImage(resolvedTwin(harness, left).output, delayed.output));
+
+			model.cycle();
+			assertEquals(left, model.open);
+			Frame back = harness.frame();
+			assertThemedNativeState(context + ": back to left", back, model);
+			assertTrue(context + ": the left child's rows", sameImage(resolvedTwin(harness, shift).output, back.output));
+
+			// Native switches with the pointer unchanged (the live 23:20:05 frame).
+			model.open = shift;
+			Frame same = harness.frame();
+			assertThemedNativeState(context + ": same-pointer switch", same, model);
+			assertTrue(context, sameImage(resolvedTwin(harness, left).output, same.output));
+
+			// The pointer inside the open child: native turns that row yellow.
+			model.live = new Point(shift.x + 60, shift.y + 31 + 15 * 3 - 5);
+			model.cycle();
+			assertEquals(shift, model.open);
+			assertTrue(context + ": the native draw highlights a child row", nativeHoverIn(model, shift));
+			Frame inside = harness.frame();
+			assertThemedNativeState(context + ": pointer inside the child", inside, model);
+			assertTrue(context, sameImage(resolvedTwin(harness, left).output, inside.output));
+
+			assertEquals(context, 0L, outcome(harness, MenuOverlay.SubmenuOutcome.FALLBACK_AMBIGUOUS));
+			assertEquals(context, 5L, outcome(harness, MenuOverlay.SubmenuOutcome.READY_WITH_NATIVE_IDENTIFIED_CHILD));
+		}
+	}
+
+	@Test
+	public void nativePixelsThatDoNotExcludeEveryOtherSiblingStayNative() throws Exception
+	{
+		// No proven image: both children share the rectangle from the first frame.
+		NativeModel model = liveMedallion();
+		Harness harness = harness(model);
+		model.childAtRow(6).setBounds(LIVE_SHARED.x, LIVE_SHARED.y, LIVE_SHARED.width, LIVE_SHARED.height);
+		model.childAtRow(7).setBounds(LIVE_SHARED.x, LIVE_SHARED.y, LIVE_SHARED.width, LIVE_SHARED.height);
+		model.live = onRootRow(model, 7);
+		model.drawMouse = model.live;
+		for (int row : new int[]{7, 6, 7})
+		{
+			model.open = model.childAtRow(row);
+			assertEquals("never proven, row " + row, Shown.NATIVE, harness.frame().shown);
+		}
+		assertEquals(3L, outcome(harness, MenuOverlay.SubmenuOutcome.FALLBACK_AMBIGUOUS));
+
+		// Only the drawn child is remembered: its image matches, the other has none, so either fits.
+		model = liveMedallion();
+		harness = harness(model);
+		hoverRow(model, 6);
+		assertThemedNativeState("proven", harness.frame(), model);
+		model.childAtRow(7).setBounds(LIVE_SHARED.x, LIVE_SHARED.y, LIVE_SHARED.width, LIVE_SHARED.height);
+		assertEquals(model.childAtRow(6), model.open);
+		assertEquals("the remembered child matches, the other is unknown", Shown.NATIVE, harness.frame().shown);
+
+		// A native draw that no longer matches the remembered images (its header differs).
+		model = liveMedallion();
+		harness = harness(model);
+		hoverRow(model, 6);
+		assertThemedNativeState("proven", harness.frame(), model);
+		hoverRow(model, 7);
+		assertThemedNativeState("identified", harness.frame(), model);
+		model.glyphSalt = 1;
+		hoverRow(model, 6);
+		assertEquals("stale images", Shown.NATIVE, harness.frame().shown);
+		model.glyphSalt = 0;
+		assertThemedNativeState("matching again", harness.frame(), model);
+
+		// The dangerous form: the drawn child's image is stale and its sibling has none, so
+		// elimination alone would pick the sibling. The differing header rejects the image.
+		model = liveMedallion();
+		harness = harness(model);
+		hoverRow(model, 6);
+		assertThemedNativeState("proven", harness.frame(), model);
+		model.childAtRow(7).setBounds(LIVE_SHARED.x, LIVE_SHARED.y, LIVE_SHARED.width, LIVE_SHARED.height);
+		model.glyphSalt = 1;
+		assertEquals(model.childAtRow(6), model.open);
+		assertEquals("a stale image never excludes the drawn child", Shown.NATIVE, harness.frame().shown);
+		assertEquals(0L, outcome(harness, MenuOverlay.SubmenuOutcome.READY_WITH_NATIVE_IDENTIFIED_CHILD));
+
+		// A new menu opening forgets every image.
+		harness.overlay.menuOpened();
+		assertEquals("forgotten with the opening", Shown.NATIVE, harness.frame().shown);
+		assertEquals(0, ((NativeChildImages) field(harness.overlay, "nativeChildImages")).size());
+
+		// A sibling whose contents changed since its image was taken has no image, so it is not
+		// excluded, and the drawn child's matching image alone proves nothing.
+		model = liveMedallion();
+		harness = harness(model);
+		hoverRow(model, 6);
+		assertThemedNativeState("proven", harness.frame(), model);
+		hoverRow(model, 7);
+		assertThemedNativeState("identified", harness.frame(), model);
+		model.childAtRow(7).entries[0] = actionEntry("Lab", "", MenuAction.RUNELITE, null, e -> { });
+		hoverRow(model, 6);
+		assertEquals("the sibling's changed contents have no image", Shown.NATIVE, harness.frame().shown);
+	}
+
+	/** The plain flat-colour draw carries no row text, so nothing tells the siblings apart. */
+	@Test
+	public void identicalNativePixelsNeverIdentifyASibling() throws Exception
+	{
+		NativeModel model = liveMedallion();
+		model.plainNativeDraw = true;
+		Harness harness = harness(model);
+		hoverRow(model, 6);
+		assertThemedNativeState("proven", harness.frame(), model);
+		hoverRow(model, 7);
+		assertEquals("the left image matches the shift child's flat pixels", Shown.NATIVE, harness.frame().shown);
+		hoverRow(model, 6);
+		assertEquals(Shown.NATIVE, harness.frame().shown);
+		assertEquals(0L, outcome(harness, MenuOverlay.SubmenuOutcome.READY_WITH_NATIVE_IDENTIFIED_CHILD));
 	}
 
 	@Test
@@ -1229,6 +2127,12 @@ public class NativeSubmenuCycleTest
 		private Rectangle unpainted;
 		/** Painted by the native draw outside every open menu (contradicts A2). */
 		private Rectangle halo;
+		/** The mouse sample the native draw highlights rows by: the client's per-cycle copy. */
+		private Point drawMouse;
+		/** Changes every glyph: a native draw that no longer matches a remembered image. */
+		private int glyphSalt;
+		/** Draws every menu as one flat colour, with no text: the harness before text emulation. */
+		private boolean plainNativeDraw;
 		/** When set, the rasterizer and buffer provider return this array instead. */
 		private int[] bufferOverride;
 		private net.runelite.api.IndexedSprite[] modIcons;
@@ -1384,6 +2288,7 @@ public class NativeSubmenuCycleTest
 		{
 			gameCycle++;
 			Point snapshot = live;
+			drawMouse = snapshot;
 			if (open != null && snapshot != null && open.bounds().contains(snapshot.getX(), snapshot.getY()))
 			{
 				hasPending = false;
@@ -1433,36 +2338,151 @@ public class NativeSubmenuCycleTest
 			child.setBounds(x, y, child.openWidth, height);
 		}
 
-		/** Reads native state only; the live mouse cannot change what is open. */
+		/**
+		 * Reads native state only; the live mouse cannot change what is open. Each menu is drawn
+		 * as the client's menu draw does: a filled rectangle, a black header bar and body outline,
+		 * the opener's target as the header, and each row's option, target and submenu suffix in
+		 * white, or yellow under the cycle's mouse sample, over a black shadow. Glyphs are a
+		 * deterministic pattern per character, standing in for the client's font.
+		 */
 		private void nativeDraw()
 		{
-			fill(root.bounds());
+			drawMenu(root, "Choose Option");
 			if (open != null)
 			{
-				fill(open.bounds());
+				drawMenu(open, openerTarget(root, open));
 				if (openGrandchild != null)
 				{
-					fill(openGrandchild.bounds());
+					drawMenu(openGrandchild, openerTarget(open, openGrandchild));
 				}
 			}
 			if (halo != null)
 			{
-				fill(halo);
+				fill(halo, GRAY);
 			}
 		}
 
-		private void fill(Rectangle rect)
+		private String openerTarget(NativeMenu parent, NativeMenu child)
 		{
-			Rectangle visible = rect.intersection(new Rectangle(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT));
+			for (MenuEntry entry : parent.entries)
+			{
+				if (entry != null && entry.getSubMenu() == child)
+				{
+					return entry.getTarget();
+				}
+			}
+			return "";
+		}
+
+		private void drawMenu(NativeMenu menu, String header)
+		{
+			Rectangle r = menu.bounds();
+			if (!plainNativeDraw)
+			{
+				fill(r, NATIVE_FILL);
+				fill(r, new Rectangle(r.x + 1, r.y + 1, r.width - 2, 16), 0xFF000000);
+				outline(r, new Rectangle(r.x + 1, r.y + 18, r.width - 2, r.height - 19));
+				text(r, header == null ? "" : header, r.x + 3, r.y + 14, NATIVE_FILL, false);
+				int count = menu.entries.length;
+				int skip = menu == root ? scroll : 0;
+				for (int i = 0; i < count; i++)
+				{
+					MenuEntry entry = menu.entries[i];
+					int position = count - 1 - i - skip;
+					int baseline = r.y + 31 + 15 * position;
+					String target = entry.getTarget();
+					String label = entry.getOption() + (target == null || target.isEmpty() ? "" : " " + target)
+						+ (entry.getSubMenu() != null ? " ->" : "");
+					boolean hovered = drawMouse != null && drawMouse.getX() > r.x && drawMouse.getX() < r.x + r.width
+						&& drawMouse.getY() > baseline - 13 && drawMouse.getY() < baseline + 3;
+					text(r, label, r.x + 3, baseline, hovered ? 0xFFFFFF00 : 0xFFFFFFFF, true);
+				}
+			}
+			else
+			{
+				fill(r, GRAY);
+			}
+		}
+
+		private void fill(Rectangle rect, int colour)
+		{
+			fill(rect, rect, colour);
+		}
+
+		private void fill(Rectangle menu, Rectangle rect, int colour)
+		{
+			Rectangle visible = rect.intersection(menu).intersection(new Rectangle(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT));
 			for (int y = visible.y; y < visible.y + visible.height; y++)
 			{
 				for (int x = visible.x; x < visible.x + visible.width; x++)
 				{
-					if (unpainted == null || !unpainted.contains(x, y))
-					{
-						pixels[y * CANVAS_WIDTH + x] = GRAY;
-					}
+					plot(menu, x, y, colour);
 				}
+			}
+		}
+
+		private void outline(Rectangle menu, Rectangle rect)
+		{
+			for (int x = rect.x; x < rect.x + rect.width; x++)
+			{
+				plot(menu, x, rect.y, 0xFF000000);
+				plot(menu, x, rect.y + rect.height - 1, 0xFF000000);
+			}
+			for (int y = rect.y; y < rect.y + rect.height; y++)
+			{
+				plot(menu, rect.x, y, 0xFF000000);
+				plot(menu, rect.x + rect.width - 1, y, 0xFF000000);
+			}
+		}
+
+		/** Colour tags change the colour, as the client's font does; other characters are glyphs. */
+		private void text(Rectangle menu, String text, int x, int baseline, int base, boolean shadow)
+		{
+			int colour = base;
+			for (int pass = shadow ? 0 : 1; pass < 2; pass++)
+			{
+				int pen = x;
+				colour = base;
+				for (int i = 0; i < text.length(); i++)
+				{
+					if (text.startsWith("<col=", i) && text.indexOf('>', i) > 0)
+					{
+						int end = text.indexOf('>', i);
+						colour = 0xFF000000 | Integer.parseInt(text.substring(i + 5, end), 16);
+						i = end;
+						continue;
+					}
+					if (text.startsWith("</col>", i))
+					{
+						colour = base;
+						i += 5;
+						continue;
+					}
+					int bits = text.charAt(i) * 0x9E3779B1 ^ glyphSalt;
+					for (int gy = 0; gy < 7; gy++)
+					{
+						for (int gx = 0; gx < 4; gx++)
+						{
+							if (text.charAt(i) != ' ' && (bits >>> (gy * 4 + gx) & 1) != 0)
+							{
+								int px = pen + gx + (pass == 0 ? 1 : 0);
+								int py = baseline - 9 + gy + (pass == 0 ? 1 : 0);
+								plot(menu, px, py, pass == 0 ? 0xFF000000 : colour);
+							}
+						}
+					}
+					pen += 5;
+				}
+			}
+		}
+
+		/** Native writes only inside the menu it draws. */
+		private void plot(Rectangle menu, int x, int y, int colour)
+		{
+			if (menu.contains(x, y) && x >= 0 && y >= 0 && x < CANVAS_WIDTH && y < CANVAS_HEIGHT
+				&& (unpainted == null || !unpainted.contains(x, y)))
+			{
+				pixels[y * CANVAS_WIDTH + x] = colour;
 			}
 		}
 	}
@@ -1577,6 +2597,42 @@ public class NativeSubmenuCycleTest
 					return 0;
 				}
 				return null;
+			});
+	}
+
+	/**
+	 * A read-only entry with its own click callback. Any setter, creator, deleter or callback
+	 * replacement throws, so a frame that touched a native entry or hitbox fails the test.
+	 */
+	private static MenuEntry actionEntry(String option, String target, MenuAction action, Menu subMenu,
+		java.util.function.Consumer<MenuEntry> callback)
+	{
+		return (MenuEntry) Proxy.newProxyInstance(MenuEntry.class.getClassLoader(),
+			new Class<?>[]{MenuEntry.class}, (proxy, method, args) ->
+			{
+				String name = method.getName();
+				if (name.startsWith("set") || name.startsWith("create") || name.startsWith("delete")
+					|| (name.equals("onClick") && args != null && args.length > 0))
+				{
+					throw new UnsupportedOperationException(name);
+				}
+				switch (name)
+				{
+					case "getOption": return option;
+					case "getTarget": return target;
+					case "getType": return action;
+					case "getSubMenu": return subMenu;
+					case "getItemId": return -1;
+					case "onClick": return callback;
+					case "hashCode": return System.identityHashCode(proxy);
+					case "equals": return proxy == args[0];
+					case "toString": return option;
+					default:
+						Class<?> type = method.getReturnType();
+						if (type == boolean.class) return false;
+						if (type == int.class) return 0;
+						return null;
+				}
 			});
 	}
 

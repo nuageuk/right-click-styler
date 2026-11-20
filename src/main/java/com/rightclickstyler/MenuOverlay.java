@@ -1,5 +1,6 @@
 package com.rightclickstyler;
 
+import com.google.gson.Gson;
 import java.awt.AlphaComposite;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
@@ -27,6 +28,17 @@ class MenuOverlay extends Overlay
 	private static final int NO_ITEM = -1;
 	private static final int EXACT_CONTRADICTION_LOG_LIMIT = 20;
 	private static final int IMAGE_CACHE_MISMATCH_LOG_LIMIT = 10;
+	private static final boolean MENU_CAPTURE_ENABLED = Boolean.getBoolean("rightclickstyler.menuCapture");
+	private static final String MENU_CAPTURE_CONTAINS = System.getProperty("rightclickstyler.menuCaptureContains", "");
+	private static final String MENU_CAPTURE_PATH = System.getProperty("rightclickstyler.menuCapturePath", "");
+	private static final int MENU_CAPTURE_LIMIT = 2;
+	private static final Gson MENU_CAPTURE_JSON = new Gson();
+	private static final boolean SUBMENU_TRACE_ENABLED = Boolean.getBoolean("rightclickstyler.submenuTrace");
+	private static final int SUBMENU_TRACE_LIMIT = 24;
+	/** Opt-in with the submenu trace: one line per distinct outcome and geometry. */
+	private static final int GEOMETRY_TRACE_SESSION_LIMIT = 200;
+	private static final int GEOMETRY_TRACE_MENU_LIMIT = 24;
+	private static final int GEOMETRY_TRACE_CHILDREN = 16;
 
 	/**
 	 * How the exact-coverage reading ("new") compares with the probe's previous resolver
@@ -55,6 +67,17 @@ class MenuOverlay extends Overlay
 		READY_ROOT_ONLY,
 		READY_WITH_CHILD,
 		READY_WITH_NATIVE_DETACHED_CHILD,
+		/**
+		 * The pixels fit several chains (such as two siblings sharing one rectangle), and every
+		 * one of them renders identically, so the frame is themed without knowing which one
+		 * native drew.
+		 */
+		READY_WITH_EQUIVALENT_CHILD,
+		/**
+		 * The pixels fit several one-menu chains sharing one rectangle, and the native draw's
+		 * own pixels in that rectangle exclude all but one of them ({@link NativeChildImages}).
+		 */
+		READY_WITH_NATIVE_IDENTIFIED_CHILD,
 		FALLBACK_AMBIGUOUS,
 		FALLBACK_INVALID_BOUNDS,
 		FALLBACK_BUFFER_MISMATCH,
@@ -82,6 +105,8 @@ class MenuOverlay extends Overlay
 	private final ThemeManager themeManager;
 	private final MenuRenderer renderer = new MenuRenderer();
 	private final NativeSubmenuProbe probe = new NativeSubmenuProbe();
+	/** Native images of child menus this menu opening proved; cleared with each opening. */
+	private final NativeChildImages nativeChildImages = new NativeChildImages();
 	private final long[] exactComparisons = new long[ExactComparison.values().length];
 	private long exactContradictionLogs;
 	private long exactContradictionSuppressed;
@@ -121,6 +146,17 @@ class MenuOverlay extends Overlay
 	private long submenuClosedDrops;
 	private long submenuChangedDrops;
 	private boolean submenuBlitFailed;
+	private boolean menuCapturePending;
+	private int menuCaptureCount;
+	private int submenuTraceLogs;
+	private int submenuTraceRepeat;
+	private Menu submenuTraceRoot;
+	private String submenuTraceState;
+	private String submenuTraceDetail;
+	private long submenuTraceStamp;
+	private int geometryTraceLogs;
+	private int geometryTraceMenuLogs;
+	private final java.util.Set<String> geometryTraceSeen = new java.util.HashSet<>();
 
 	/**
 	 * Set after the first render failure. The plugin consumes {@code BeforeMenuRender}, so a render
@@ -155,6 +191,7 @@ class MenuOverlay extends Overlay
 		synchronized (this)
 		{
 			imageCache.invalidate();
+			nativeChildImages.clear();
 		}
 	}
 
@@ -162,6 +199,14 @@ class MenuOverlay extends Overlay
 	synchronized void menuOpened()
 	{
 		clearPrepared();
+		menuCapturePending = MENU_CAPTURE_ENABLED && menuCaptureCount < MENU_CAPTURE_LIMIT;
+		submenuTraceRoot = null;
+		submenuTraceState = null;
+		submenuTraceDetail = null;
+		submenuTraceRepeat = 0;
+		geometryTraceMenuLogs = 0;
+		geometryTraceSeen.clear();
+		nativeChildImages.clear();
 	}
 
 	synchronized void discardPreparedAtEventStart()
@@ -172,6 +217,10 @@ class MenuOverlay extends Overlay
 	synchronized void setExternallyConsumed(boolean consumed)
 	{
 		externallyConsumed = consumed;
+		if (consumed)
+		{
+			traceSwap("external-consume", "BeforeMenuRender consumed before Right Click Styler");
+		}
 	}
 
 	synchronized void recordAlreadyConsumedSubmenu()
@@ -181,8 +230,301 @@ class MenuOverlay extends Overlay
 
 	private void recordOutcome(SubmenuOutcome outcome)
 	{
+		recordOutcome(outcome, "");
+	}
+
+	private void recordOutcome(SubmenuOutcome outcome, String detail)
+	{
+		traceSwap(outcome.name(), detail);
 		lastOutcome = outcome;
 		submenuOutcomes[outcome.ordinal()]++;
+	}
+
+	/** Opt-in, bounded transition evidence for Menu Entry Swapper submenus. */
+	private void traceSwap(String state, String detail)
+	{
+		if (!SUBMENU_TRACE_ENABLED || submenuTraceLogs >= SUBMENU_TRACE_LIMIT)
+		{
+			return;
+		}
+		detail = detail == null ? "" : detail;
+		try
+		{
+			Menu root = client.getMenu();
+			MenuEntry[] entries = root == null ? null : root.getMenuEntries();
+			StringBuilder swaps = new StringBuilder();
+			long stamp = 1;
+			if (entries != null)
+			{
+				for (int i = 0; i < entries.length; i++)
+				{
+					MenuEntry entry = entries[i];
+					if (entry == null)
+					{
+						continue;
+					}
+					Menu child = entry.getSubMenu();
+					stamp = 31 * stamp + System.identityHashCode(child);
+					String option = entry.getOption();
+					stamp = 31 * stamp + (option == null ? 0 : option.hashCode());
+					String target = entry.getTarget();
+					stamp = 31 * stamp + (target == null ? 0 : target.hashCode());
+					if (option != null && (option.contains("Swap shift-click") || option.contains("Swap left-click")))
+					{
+						swaps.append('[').append(i).append(':').append(shortTraceText(option))
+							.append(" entry=").append(System.identityHashCode(entry))
+							.append(" child=").append(System.identityHashCode(child));
+						if (child != null)
+						{
+							stamp = 31 * stamp + child.getMenuX();
+							stamp = 31 * stamp + child.getMenuWidth();
+							swaps.append(" bounds=").append(child.getMenuX()).append(',')
+								.append(child.getMenuY()).append(',').append(child.getMenuWidth())
+								.append(',').append(child.getMenuHeight())
+								.append(" opensLeft=").append(child.getMenuX() < root.getMenuX());
+						}
+						swaps.append(']');
+					}
+				}
+			}
+			if (swaps.length() == 0 && (submenuTraceRoot == null || root != submenuTraceRoot))
+			{
+				return;
+			}
+			if (root == submenuTraceRoot && state.equals(submenuTraceState)
+				&& detail.equals(submenuTraceDetail) && stamp == submenuTraceStamp)
+			{
+				submenuTraceRepeat++;
+				if (submenuTraceRepeat != 30 && submenuTraceRepeat != 120)
+				{
+					return;
+				}
+			}
+			else
+			{
+				submenuTraceRoot = root;
+				submenuTraceState = state;
+				submenuTraceDetail = detail;
+				submenuTraceStamp = stamp;
+				submenuTraceRepeat = 1;
+			}
+			submenuTraceLogs++;
+			log.info("RCS_SUBMENU_TRACE state={} repeat={} detail={} root={} bounds={},{},{},{} entries={} stamp={} swaps={}",
+				state, submenuTraceRepeat, shortTraceText(detail), System.identityHashCode(root),
+				root == null ? 0 : root.getMenuX(), root == null ? 0 : root.getMenuY(),
+				root == null ? 0 : root.getMenuWidth(), root == null ? 0 : root.getMenuHeight(),
+				entries == null ? 0 : entries.length, stamp, swaps);
+		}
+		catch (RuntimeException e)
+		{
+			// Diagnostics must not affect native fallback or themed rendering.
+		}
+	}
+
+	private static String shortTraceText(String text)
+	{
+		return text == null ? "" : Limits.truncate(text, 120);
+	}
+
+	/** A consumed frame whose prepared image could not be drawn: the final renderer state. */
+	private void traceFinalDrop(String detail)
+	{
+		traceSwap("final-drop", detail);
+		if (SUBMENU_TRACE_ENABLED && geometryTraceLogs < GEOMETRY_TRACE_SESSION_LIMIT
+			&& geometryTraceMenuLogs < GEOMETRY_TRACE_MENU_LIMIT && geometryTraceSeen.add("final-drop|" + detail))
+		{
+			geometryTraceLogs++;
+			geometryTraceMenuLogs++;
+			log.info("RCS_SUBMENU_GEOMETRY outcome=FINAL_DROP reason={} blitFailed={}", detail, submenuBlitFailed);
+		}
+	}
+
+	/**
+	 * Opt-in, bounded geometry evidence for one prepared frame's outcome: logged once per
+	 * distinct outcome, reason and geometry (the pointer is reported but not part of that key),
+	 * at most {@link #GEOMETRY_TRACE_MENU_LIMIT} per opened menu and
+	 * {@link #GEOMETRY_TRACE_SESSION_LIMIT} per session.
+	 */
+	private void traceGeometry(SubmenuOutcome outcome, String reason, SubmenuTree tree,
+		NativeSubmenuProbe.Result result, ScrollableMenuViewport viewport, Point mouse,
+		int canvasWidth, int canvasHeight)
+	{
+		if (!SUBMENU_TRACE_ENABLED || geometryTraceLogs >= GEOMETRY_TRACE_SESSION_LIMIT
+			|| geometryTraceMenuLogs >= GEOMETRY_TRACE_MENU_LIMIT)
+		{
+			return;
+		}
+		try
+		{
+			String geometry = describeGeometry(tree, result, viewport, canvasWidth, canvasHeight);
+			reason = reason == null ? "" : Limits.truncate(reason, 300);
+			if (!geometryTraceSeen.add(outcome + "|" + reason + "|" + geometry))
+			{
+				return;
+			}
+			geometryTraceLogs++;
+			geometryTraceMenuLogs++;
+			log.info("RCS_SUBMENU_GEOMETRY outcome={} reason={} probe={}: {} exact={} {} pointer={}",
+				outcome, reason, result.state, shortTraceText(result.reason), result.exact, geometry,
+				describePointer(tree, viewport, mouse));
+		}
+		catch (RuntimeException e)
+		{
+			// Diagnostics must not affect native fallback or themed rendering.
+		}
+	}
+
+	/** Canvas, root and every visible child: bounds, opening side, edge clamping and evidence. */
+	static String describeGeometry(SubmenuTree tree, NativeSubmenuProbe.Result result,
+		ScrollableMenuViewport viewport, int canvasWidth, int canvasHeight)
+	{
+		SubmenuTree.Node root = tree.nodes.get(0);
+		StringBuilder text = new StringBuilder("canvas=").append(canvasWidth).append('x').append(canvasHeight)
+			.append(" root=").append(boundsText(root.bounds)).append(" rootEdges=")
+			.append(edges(root.bounds, canvasWidth, canvasHeight)).append(" rootRows=").append(root.entries.length)
+			.append(" scroll=").append(viewport == null ? "?" : String.valueOf(viewport.firstRow));
+		int[] covered = result.exact == null ? new int[0] : result.exact.covered;
+		if (result.exact != null && result.exact.alternatives.length > 0)
+		{
+			text.append(" alternatives=");
+			for (int[] alternative : result.exact.alternatives)
+			{
+				text.append(Arrays.toString(alternative));
+			}
+		}
+		text.append(" children=");
+		int listed = 0;
+		int hidden = 0;
+		for (int i = 0; i < tree.candidateBounds.size(); i++)
+		{
+			Rectangle bounds = tree.candidateBounds.get(i);
+			if (bounds.width <= 0 || bounds.height <= 0)
+			{
+				continue;
+			}
+			if (listed++ >= GEOMETRY_TRACE_CHILDREN)
+			{
+				hidden++;
+				continue;
+			}
+			SubmenuTree.Node node = tree.nodes.get(i + 1);
+			SubmenuTree.Node parent = tree.nodes.get(node.parentNode);
+			int row = parent.entries.length - 1 - node.parentEntryIndex;
+			MenuEntry opener = parent.entries[node.parentEntryIndex];
+			Integer rowTop = node.parentNode != 0
+				? Integer.valueOf(parent.bounds.y + MenuRenderer.HEADER_HEIGHT + row * MenuRenderer.ROW_HEIGHT)
+				: viewport != null && viewport.containsRow(row) ? Integer.valueOf(viewport.rowTop(row)) : null;
+			text.append("[#").append(i).append(" parent=")
+				.append(node.parentNode == 0 ? "root" : "#" + (node.parentNode - 1))
+				.append(" row=").append(row).append(" '")
+				.append(opener == null ? "" : Limits.truncate(String.valueOf(opener.getOption()), 40))
+				.append("' at=").append(boundsText(bounds))
+				.append(" side=").append(bounds.x < parent.bounds.x ? "left" : "right")
+				.append(" rows=").append(node.entries.length);
+			if (rowTop != null)
+			{
+				int naturalY = rowTop - MenuRenderer.HEADER_HEIGHT;
+				text.append(" naturalY=").append(naturalY);
+				if (naturalY != bounds.y)
+				{
+					text.append(naturalY + bounds.height > canvasHeight && bounds.y + bounds.height == canvasHeight
+						? " clampedBottom" : naturalY < 0 && bounds.y == 0 ? " clampedTop" : " offsetY");
+				}
+			}
+			else
+			{
+				text.append(" parentRowOffscreen");
+			}
+			String edges = edges(bounds, canvasWidth, canvasHeight);
+			if (!edges.equals("none"))
+			{
+				text.append(" edges=").append(edges);
+			}
+			for (int c : covered)
+			{
+				if (c == i)
+				{
+					text.append(" covered");
+				}
+			}
+			StringBuilder shares = new StringBuilder();
+			for (int j = 0; j < tree.candidateBounds.size(); j++)
+			{
+				if (j != i && tree.candidateBounds.get(j).equals(bounds))
+				{
+					shares.append(shares.length() == 0 ? "" : ",").append('#').append(j);
+				}
+			}
+			if (shares.length() > 0)
+			{
+				text.append(" sameRectAs=").append(shares);
+			}
+			text.append(']');
+		}
+		if (listed == 0)
+		{
+			text.append("none");
+		}
+		if (hidden > 0)
+		{
+			text.append("[+").append(hidden).append(" more]");
+		}
+		return text.toString();
+	}
+
+	/** The frame's mouse sample, the root row under it and any visible child containing it. */
+	static String describePointer(SubmenuTree tree, ScrollableMenuViewport viewport, Point mouse)
+	{
+		if (mouse == null)
+		{
+			return "none";
+		}
+		StringBuilder text = new StringBuilder().append(mouse.getX()).append(',').append(mouse.getY());
+		SubmenuTree.Node root = tree.nodes.get(0);
+		int rootRow = viewport == null ? -1 : viewport.hoverIndex(mouse);
+		if (rootRow >= 0 && rootRow < root.entries.length)
+		{
+			MenuEntry entry = root.entries[root.entries.length - 1 - rootRow];
+			text.append(" rootRow=").append(rootRow).append(" '")
+				.append(entry == null ? "" : Limits.truncate(String.valueOf(entry.getOption()), 40)).append('\'');
+		}
+		for (int i = 0; i < tree.candidateBounds.size(); i++)
+		{
+			Rectangle bounds = tree.candidateBounds.get(i);
+			if (bounds.width > 0 && bounds.height > 0 && bounds.contains(mouse.getX(), mouse.getY()))
+			{
+				text.append(" inside=#").append(i).append(" row=")
+					.append(hoverIndex(bounds, tree.nodes.get(i + 1).entries.length, mouse));
+			}
+		}
+		return text.toString();
+	}
+
+	private static String boundsText(Rectangle r)
+	{
+		return r.x + "," + r.y + "," + r.width + "x" + r.height;
+	}
+
+	private static String edges(Rectangle r, int canvasWidth, int canvasHeight)
+	{
+		StringBuilder edges = new StringBuilder();
+		if (r.y <= 0)
+		{
+			edges.append("top,");
+		}
+		if (r.y + r.height >= canvasHeight)
+		{
+			edges.append("bottom,");
+		}
+		if (r.x <= 0)
+		{
+			edges.append("left,");
+		}
+		if (r.x + r.width >= canvasWidth)
+		{
+			edges.append("right,");
+		}
+		return edges.length() == 0 ? "none" : edges.substring(0, edges.length() - 1);
 	}
 
 	/**
@@ -251,24 +593,57 @@ class MenuOverlay extends Overlay
 				|| (scrollable && client.getMenuScroll() != scroll))
 			{
 				recordOutcome(SubmenuOutcome.FALLBACK_SCROLLABLE);
+				traceGeometry(SubmenuOutcome.FALLBACK_SCROLLABLE, "viewport or scroll changed during the probe",
+					tree, result, viewport, frameMouse, canvasWidth, canvasHeight);
 				return false;
 			}
 			// The exact reading decides. Anything but one uniquely resolved chain on a
 			// verified framebuffer stays native: no guess, no forced selection.
 			SubmenuOutcome rejection = authoritativeRejection(result, tree);
-			if (rejection != null)
+			// Ambiguous pixels: theme only when every chain they fit renders identically.
+			StringBuilder why = SUBMENU_TRACE_ENABLED ? new StringBuilder() : null;
+			int[][] equivalent = rejection == SubmenuOutcome.FALLBACK_AMBIGUOUS
+				? visuallyEquivalentAlternatives(result, tree, viewport, frameMouse, scroll, why) : null;
+			// Otherwise, only the native draw's own pixels may tell the alternatives apart.
+			int[] identified = null;
+			if (rejection == SubmenuOutcome.FALLBACK_AMBIGUOUS && equivalent == null)
 			{
-				recordOutcome(rejection);
+				StringBuilder identifyWhy = why == null ? null : new StringBuilder();
+				identified = nativeChildImages.identify(result, tree, identifyWhy);
+				if (identified == null && why != null)
+				{
+					why.append("; native pixels: ").append(identifyWhy);
+				}
+			}
+			if (rejection == null && result.exact.chain.length == 1)
+			{
+				nativeChildImages.remember(result, tree, result.exact.chain[0]);
+			}
+			else if (identified != null)
+			{
+				nativeChildImages.remember(result, tree, identified[0]);
+			}
+			if (rejection != null && equivalent == null && identified == null)
+			{
+				recordOutcome(rejection, result.reason);
+				traceGeometry(rejection, why == null || why.length() == 0 ? "exact reading rejected" : why.toString(),
+					tree, result, viewport, frameMouse, canvasWidth, canvasHeight);
 				return false;
 			}
-			int[] chain = result.exact.chain;
-			ScrollChildValidation childValidation = scrollable
-				? validateScrolledChild(tree, chain, viewport, canvasHeight, result)
-				: ScrollChildValidation.ATTACHED;
-			if (childValidation.reason != null)
+			int[] chain = equivalent != null ? equivalent[0] : identified != null ? identified : result.exact.chain;
+			ScrollChildValidation childValidation = ScrollChildValidation.ATTACHED;
+			for (int i = 0; scrollable && i < (equivalent != null ? equivalent.length : 1); i++)
 			{
-				recordOutcome(SubmenuOutcome.FALLBACK_SCROLLABLE);
-				return false;
+				// An ambiguous frame proves no single child, so a detached one is rejected here.
+				childValidation = validateScrolledChild(tree, equivalent != null ? equivalent[i] : chain,
+					viewport, canvasHeight, result);
+				if (childValidation.reason != null)
+				{
+					recordOutcome(SubmenuOutcome.FALLBACK_SCROLLABLE);
+					traceGeometry(SubmenuOutcome.FALLBACK_SCROLLABLE, childValidation.reason,
+						tree, result, viewport, frameMouse, canvasWidth, canvasHeight);
+					return false;
+				}
 			}
 			Rectangle region = new Rectangle(tree.nodes.get(0).bounds);
 			for (int candidate : chain)
@@ -280,6 +655,8 @@ class MenuOverlay extends Overlay
 			if (region.width <= 0 || region.height <= 0)
 			{
 				recordOutcome(SubmenuOutcome.FALLBACK_INVALID_BOUNDS);
+				traceGeometry(SubmenuOutcome.FALLBACK_INVALID_BOUNDS, "empty image region " + region,
+					tree, result, viewport, frameMouse, canvasWidth, canvasHeight);
 				return false;
 			}
 			if (submenuImage == null || submenuImage.getWidth() != region.width
@@ -288,10 +665,16 @@ class MenuOverlay extends Overlay
 				submenuImage = new BufferedImage(region.width, region.height, BufferedImage.TYPE_INT_ARGB);
 				imageCache.invalidate();
 			}
-			PreparedMenuState state = PreparedMenuState.capture(tree, chain);
-			if (state.mismatchReason(client.getMenu()) != null)
+			// Every alternative's nodes, so a change to any of them before the blit drops the frame.
+			PreparedMenuState state = equivalent != null ? PreparedMenuState.capture(tree, equivalent)
+				: identified != null ? PreparedMenuState.capture(tree, result.exact.alternatives)
+				: PreparedMenuState.capture(tree, chain);
+			String mismatch = state.mismatchReason(client.getMenu());
+			if (mismatch != null)
 			{
-				recordOutcome(SubmenuOutcome.FALLBACK_TRANSIENT);
+				recordOutcome(SubmenuOutcome.FALLBACK_TRANSIENT, mismatch);
+				traceGeometry(SubmenuOutcome.FALLBACK_TRANSIENT, "prepared state: " + mismatch,
+					tree, result, viewport, frameMouse, canvasWidth, canvasHeight);
 				return false;
 			}
 			preparingTheme = true;
@@ -307,7 +690,9 @@ class MenuOverlay extends Overlay
 				|| state.mismatchReason(client.getMenu()) != null;
 			if (changed)
 			{
-				recordOutcome(SubmenuOutcome.FALLBACK_TRANSIENT);
+				recordOutcome(SubmenuOutcome.FALLBACK_TRANSIENT, "menu/scroll/entry changed after image render");
+				traceGeometry(SubmenuOutcome.FALLBACK_TRANSIENT, "prepared state changed after image render",
+					tree, result, viewport, frameMouse, canvasWidth, canvasHeight);
 				return false;
 			}
 			preparedX = region.x;
@@ -317,10 +702,40 @@ class MenuOverlay extends Overlay
 			preparedScrollable = scrollable;
 			preparedScroll = scroll;
 			prepared = true;
-			recordOutcome(chain.length == 0
-				? SubmenuOutcome.READY_ROOT_ONLY
+			if (menuCapturePending)
+			{
+				Graphics2D captureGraphics = submenuImage.createGraphics();
+				try
+				{
+					captureGraphics.translate(-region.x, -region.y);
+					for (int depth = 0; depth <= chain.length && menuCapturePending; depth++)
+					{
+						SubmenuTree.Node node = menuNode(tree, chain, depth);
+						int capturedHover = depth == 0 ? viewport.hoverIndex(frameMouse)
+							: hoverIndex(node.bounds, submenuRowBuffer(depth).rows.size(), frameMouse);
+						captureMenu(captureGraphics, theme, submenuRowBuffer(depth).rows, node.bounds,
+							capturedHover, node.header,
+							depth == 0 ? "submenu-root-prepared" : "submenu-child-prepared");
+					}
+				}
+				finally
+				{
+					captureGraphics.dispose();
+				}
+			}
+			SubmenuOutcome ready = equivalent != null ? SubmenuOutcome.READY_WITH_EQUIVALENT_CHILD
+				: identified != null ? SubmenuOutcome.READY_WITH_NATIVE_IDENTIFIED_CHILD
+				: chain.length == 0 ? SubmenuOutcome.READY_ROOT_ONLY
 				: childValidation.detached ? SubmenuOutcome.READY_WITH_NATIVE_DETACHED_CHILD
-				: SubmenuOutcome.READY_WITH_CHILD);
+				: SubmenuOutcome.READY_WITH_CHILD;
+			String readyDetail = equivalent != null ? equivalent.length + " equivalent chains"
+				: identified != null ? "native pixels identify chain " + Arrays.toString(chain)
+					+ " of " + result.exact.alternatives.length
+				: "chain " + Arrays.toString(chain);
+			recordOutcome(ready, equivalent != null || identified != null ? readyDetail : "");
+			// Successful frames too, once per geometry, so a fallback can be compared with the
+			// themed frames around it.
+			traceGeometry(ready, readyDetail, tree, result, viewport, frameMouse, canvasWidth, canvasHeight);
 			return true;
 		}
 		catch (IllegalArgumentException e)
@@ -334,7 +749,8 @@ class MenuOverlay extends Overlay
 		{
 			clearPrepared();
 			recordOutcome(preparingTheme
-				? SubmenuOutcome.FALLBACK_RENDER_EXCEPTION : SubmenuOutcome.FALLBACK_PROBE_EXCEPTION);
+				? SubmenuOutcome.FALLBACK_RENDER_EXCEPTION : SubmenuOutcome.FALLBACK_PROBE_EXCEPTION,
+				e.getClass().getSimpleName() + ": " + e.getMessage());
 			long now = System.nanoTime();
 			if (now - lastFailureLog >= 5_000_000_000L)
 			{
@@ -419,6 +835,113 @@ class MenuOverlay extends Overlay
 			parent = candidate;
 		}
 		return true;
+	}
+
+	/**
+	 * The chains an ambiguous frame fits, when themeing it needs no choice between them: null
+	 * unless the exact reading listed every explaining chain on a verified framebuffer, each is
+	 * well formed, any chain the previous resolver proved is among them, and every one gives
+	 * the renderer equal inputs for every menu it draws (bounds, header and its colour kind,
+	 * every row's option, target, kind and arrow, and hovered row). Callbacks, entry identity
+	 * and which entry opened a child are not rendering inputs, so siblings that differ only
+	 * there theme identically. Menu Entry Swapper's left-click and shift-click submenus usually
+	 * do not: each leaves out the op currently set for its own mode, so their rows differ even
+	 * though their row counts, and so their rectangles at a clamped edge, are equal.
+	 *
+	 * <p>The root is the same node in every chain and its hover comes from the frame's mouse
+	 * sample alone, so no root row is highlighted because of which child native drew.
+	 */
+	static int[][] visuallyEquivalentAlternatives(NativeSubmenuProbe.Result result, SubmenuTree tree,
+		ScrollableMenuViewport viewport, Point mouse, int scroll)
+	{
+		return visuallyEquivalentAlternatives(result, tree, viewport, mouse, scroll, null);
+	}
+
+	/** @param why diagnostics only: receives the reason when the result is null; may be null */
+	static int[][] visuallyEquivalentAlternatives(NativeSubmenuProbe.Result result, SubmenuTree tree,
+		ScrollableMenuViewport viewport, Point mouse, int scroll, StringBuilder why)
+	{
+		ExactCoverageResolver.Outcome exact = result.exact;
+		if (!result.framebufferVerified || exact == null
+			|| exact.state != ExactCoverageResolver.State.AMBIGUOUS || exact.alternatives.length < 2
+			|| exact.alternatives.length != exact.explainingChains)
+		{
+			if (why != null)
+			{
+				why.append(!result.framebufferVerified ? "framebuffer unverified"
+					: exact == null ? "no exact reading"
+					: exact.state != ExactCoverageResolver.State.AMBIGUOUS ? "exact " + exact.state
+					: exact.hiddenCandidate >= 0 ? "hidden-grandchild guard: candidate " + exact.hiddenCandidate
+						+ " could be drawn unseen beneath an explaining chain"
+					: "alternatives incomplete " + exact.alternatives.length + "/" + exact.explainingChains);
+			}
+			return null;
+		}
+		int[][] alternatives = exact.alternatives;
+		boolean previousProved = false;
+		for (int[] alternative : alternatives)
+		{
+			if (!wellFormedChain(alternative, tree))
+			{
+				if (why != null)
+				{
+					why.append("malformed chain ").append(Arrays.toString(alternative));
+				}
+				return null;
+			}
+			previousProved |= Arrays.equals(alternative, result.activeChain);
+		}
+		if ((result.state == NativeSubmenuProbe.State.NO_CHILD
+			|| result.state == NativeSubmenuProbe.State.ACTIVE) && !previousProved)
+		{
+			if (why != null)
+			{
+				why.append("previous resolver proved ").append(Arrays.toString(result.activeChain))
+					.append(", not an alternative");
+			}
+			return null; // the previous resolver proved a chain the pixels do not fit
+		}
+		SubmenuTree.Node root = tree.nodes.get(0);
+		List<MenuRenderer.Row> rootRows = new ArrayList<>();
+		MenuRenderer.TargetKind rootKind = fillMenuRows(root, null, rootRows, new ArrayList<>());
+		SubmenuImageCache.Menu rootMenu = SubmenuImageCache.menu(root.bounds, root.header, rootKind,
+			scroll, viewport.hoverIndex(mouse), rootRows);
+		SubmenuImageCache.Menu[] first = drawnMenus(tree, alternatives[0], rootMenu, rootRows, mouse);
+		for (int i = 1; i < alternatives.length; i++)
+		{
+			SubmenuImageCache.Menu[] other = drawnMenus(tree, alternatives[i], rootMenu, rootRows, mouse);
+			if (SubmenuImageCache.menusDifference(first, other) != SubmenuImageCache.Miss.HIT)
+			{
+				if (why != null)
+				{
+					why.append("chains ").append(Arrays.toString(alternatives[0])).append(" and ")
+						.append(Arrays.toString(alternatives[i])).append(" differ: ")
+						.append(SubmenuImageCache.describeDifference(first, other));
+				}
+				return null;
+			}
+		}
+		return alternatives;
+	}
+
+	/** The renderer inputs of one chain, filled exactly as {@link #renderOrReuseSubmenuImage} fills them. */
+	private static SubmenuImageCache.Menu[] drawnMenus(SubmenuTree tree, int[] chain,
+		SubmenuImageCache.Menu rootMenu, List<MenuRenderer.Row> rootRows, Point mouse)
+	{
+		SubmenuImageCache.Menu[] menus = new SubmenuImageCache.Menu[chain.length + 1];
+		menus[0] = rootMenu;
+		List<MenuRenderer.Row> parentRows = rootRows;
+		for (int depth = 1; depth <= chain.length; depth++)
+		{
+			SubmenuTree.Node node = menuNode(tree, chain, depth);
+			MenuRenderer.Row parentRow = openingRow(tree, node, menuNode(tree, chain, depth - 1), parentRows);
+			List<MenuRenderer.Row> rows = new ArrayList<>();
+			MenuRenderer.TargetKind headerKind = fillMenuRows(node, parentRow, rows, new ArrayList<>());
+			menus[depth] = SubmenuImageCache.menu(node.bounds, node.header, headerKind, 0,
+				hoverIndex(node.bounds, rows.size(), mouse), rows);
+			parentRows = rows;
+		}
+		return menus;
 	}
 
 	/** Bookkeeping only: nothing here reaches the rendering decision. */
@@ -858,6 +1381,7 @@ class MenuOverlay extends Overlay
 				if (!open)
 				{
 					submenuClosedDrops++;
+					traceFinalDrop("menu closed after event consumed");
 				}
 				// The event is already consumed, so a drop here leaves this frame without a
 				// menu. Only structural changes may cause it; the pointer is never read here.
@@ -868,6 +1392,7 @@ class MenuOverlay extends Overlay
 				{
 					submenuChangedDrops++;
 					submenuBlitFailed = true;
+					traceFinalDrop("root, scroll or entries changed after event consumed");
 				}
 				else if (graphics.drawImage(submenuImage, preparedX, preparedY, null))
 				{
@@ -876,11 +1401,13 @@ class MenuOverlay extends Overlay
 				else
 				{
 					submenuBlitFailed = true;
+					traceFinalDrop("drawImage returned false after event consumed");
 				}
 			}
 			catch (RuntimeException e)
 			{
 				submenuBlitFailed = true;
+				traceFinalDrop(e.getClass().getSimpleName() + ": " + e.getMessage());
 				log.warn("Submenu final image draw failed; native menus resume on subsequent frames", e);
 			}
 			finally
@@ -917,6 +1444,43 @@ class MenuOverlay extends Overlay
 		Player local = client.getLocalPlayer();
 		int localLevel = local != null ? local.getCombatLevel() : 0;
 		renderer.render(graphics, client, theme, config, rows, bounds, hoverIndex, localLevel);
+		captureMenu(graphics, theme, rows, bounds, hoverIndex, null, "ordinary-overlay");
+	}
+
+	private void captureMenu(Graphics2D graphics, Theme theme, List<MenuRenderer.Row> entries,
+		Rectangle menuBounds, int hovered, String header, String path)
+	{
+		if (!menuCapturePending || menuCaptureCount >= MENU_CAPTURE_LIMIT
+			|| (!MENU_CAPTURE_PATH.isEmpty() && !path.startsWith(MENU_CAPTURE_PATH)))
+		{
+			return;
+		}
+		if (!MENU_CAPTURE_CONTAINS.isEmpty())
+		{
+			boolean match = header != null && header.contains(MENU_CAPTURE_CONTAINS);
+			for (MenuRenderer.Row row : entries)
+			{
+				match |= row.option() != null && row.option().contains(MENU_CAPTURE_CONTAINS);
+				match |= row.target() != null && row.target().contains(MENU_CAPTURE_CONTAINS);
+			}
+			if (!match)
+			{
+				return;
+			}
+		}
+		menuCapturePending = false;
+		menuCaptureCount++;
+		try
+		{
+			MenuRenderer.GeometryCapture capture = renderer.inspectGeometry(graphics, client, theme,
+				config, entries, menuBounds, hovered, header, path,
+				client.getCanvasWidth(), client.getCanvasHeight());
+			log.info("RCS_MENU_GEOMETRY {}", MENU_CAPTURE_JSON.toJson(capture));
+		}
+		catch (RuntimeException e)
+		{
+			log.warn("Menu geometry capture failed", e);
+		}
 	}
 
 	static void setNativeBounds(Rectangle target, Menu menu)

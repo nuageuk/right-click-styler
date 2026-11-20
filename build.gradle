@@ -38,6 +38,8 @@ tasks.withType(JavaCompile).configureEach {
 // -PwriteProbeGolden=<path> regenerates the probe semantics golden file instead of checking it.
 tasks.withType(Test).configureEach {
 	systemProperty 'rightclickstyler.writeProbeGolden', project.findProperty('writeProbeGolden') ?: ''
+	systemProperty 'rightclickstyler.menuGeometryReplay', project.findProperty('menuGeometryReplay') ?: ''
+	systemProperty 'rightclickstyler.submenuTrace', project.hasProperty('submenuTrace') ? 'true' : 'false'
 	outputs.upToDateWhen { !project.hasProperty('writeProbeGolden') }
 }
 
@@ -46,6 +48,21 @@ tasks.register('run', JavaExec) {
 	mainClass = pluginMainClass
 
 	jvmArgs "-ea"
+	if (project.hasProperty('menuCapture')) {
+		jvmArgs '-Drightclickstyler.menuCapture=true'
+		if (project.hasProperty('menuCaptureContains')) {
+			jvmArgs "-Drightclickstyler.menuCaptureContains=${project.property('menuCaptureContains')}"
+		}
+		if (project.hasProperty('menuCaptureBuild')) {
+			jvmArgs "-Drightclickstyler.menuCaptureBuild=${project.property('menuCaptureBuild')}"
+		}
+		if (project.hasProperty('menuCapturePath')) {
+			jvmArgs "-Drightclickstyler.menuCapturePath=${project.property('menuCapturePath')}"
+		}
+	}
+	if (project.hasProperty('submenuTrace')) {
+		jvmArgs '-Drightclickstyler.submenuTrace=true'
+	}
 	args "--developer-mode", "--debug"
 }
 

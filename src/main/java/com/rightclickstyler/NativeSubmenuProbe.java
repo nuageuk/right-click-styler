@@ -44,6 +44,10 @@ final class NativeSubmenuProbe
 	private final ExactCoverageResolver exactResolver = new ExactCoverageResolver();
 	private ExactCoverageResolver.Outcome lastExact = ExactCoverageResolver.Outcome.NOT_EVALUATED;
 	private boolean lastFramebufferVerified;
+	/** Bounded like the candidate area: at most a few child rectangles are copied. */
+	private static final long MAX_CAPTURE_PIXELS = 1_048_576;
+	private int[] capturePool = new int[0];
+	private NativeCapture lastCapture;
 
 	Result probe(Client client, SubmenuTree tree)
 	{
@@ -93,6 +97,7 @@ final class NativeSubmenuProbe
 		result.candidatePixels = lastCandidatePixels;
 		result.exact = lastExact;
 		result.framebufferVerified = lastFramebufferVerified;
+		result.nativeCapture = lastFramebufferVerified ? lastCapture : null;
 		return result;
 	}
 
@@ -103,6 +108,7 @@ final class NativeSubmenuProbe
 		lastCandidatePixels = 0;
 		lastExact = ExactCoverageResolver.Outcome.NOT_EVALUATED;
 		lastFramebufferVerified = false;
+		lastCapture = null;
 		if (pixels == null || width <= 0 || height <= 0 || (long) width * height > pixels.length)
 		{
 			return Result.failure(State.UNSUPPORTED, "invalid framebuffer");
@@ -464,6 +470,9 @@ final class NativeSubmenuProbe
 				}
 				lastExact = exactResolver.resolve(pixels, width, height, SENTINEL, root, MARGIN,
 					candidates, tree.candidateParents, dormant, positions, sizes);
+				// Still before the restore: the native draw's own pixels for the child menus the
+				// reading proved or could not tell apart. Copying cannot throw or write pixels.
+				lastCapture = captureNative(pixels, width, height, root, candidates, lastExact);
 			}
 		}
 		finally
@@ -556,6 +565,149 @@ final class NativeSubmenuProbe
 		}
 		return new Result(chain.length == 0 ? State.NO_CHILD : State.ACTIVE,
 			"sampled", chain, counts, changes, sharedCounts, sharedChanges, true);
+	}
+
+	/**
+	 * Copies the native draw's pixels of each one-menu chain the exact reading resolved (one) or
+	 * listed as an alternative (several): the evidence {@link NativeChildImages} compares. Longer
+	 * chains are not captured, since a deeper menu overdraws its parent.
+	 */
+	private NativeCapture captureNative(int[] pixels, int width, int height, Rectangle root,
+		List<Rectangle> candidates, ExactCoverageResolver.Outcome exact)
+	{
+		int[] wanted;
+		if (exact.state == ExactCoverageResolver.State.RESOLVED && exact.chain.length == 1)
+		{
+			wanted = new int[]{exact.chain[0]};
+		}
+		else if (exact.state == ExactCoverageResolver.State.AMBIGUOUS && exact.alternatives.length >= 2)
+		{
+			wanted = new int[exact.alternatives.length];
+			for (int i = 0; i < wanted.length; i++)
+			{
+				if (exact.alternatives[i].length != 1)
+				{
+					return null;
+				}
+				wanted[i] = exact.alternatives[i][0];
+			}
+		}
+		else
+		{
+			return null;
+		}
+		long total = 0;
+		for (int candidate : wanted)
+		{
+			Rectangle r = candidates.get(candidate);
+			total += (long) r.width * r.height;
+		}
+		if (total > MAX_CAPTURE_PIXELS)
+		{
+			return null;
+		}
+		if (capturePool.length < total)
+		{
+			capturePool = new int[(int) total];
+		}
+		int[] offsets = new int[wanted.length];
+		Rectangle[] bounds = new Rectangle[wanted.length];
+		int offset = 0;
+		for (int k = 0; k < wanted.length; k++)
+		{
+			Rectangle r = new Rectangle(candidates.get(wanted[k]));
+			bounds[k] = r;
+			offsets[k] = offset;
+			Arrays.fill(capturePool, offset, offset + r.width * r.height, 0);
+			int fromX = Math.max(0, r.x);
+			int toX = Math.min(width, r.x + r.width);
+			for (int y = Math.max(0, r.y); y < Math.min(height, r.y + r.height) && fromX < toX; y++)
+			{
+				System.arraycopy(pixels, y * width + fromX, capturePool,
+					offset + (y - r.y) * r.width + (fromX - r.x), toX - fromX);
+			}
+			offset += r.width * r.height;
+		}
+		return new NativeCapture(capturePool, wanted, offsets, bounds, new Rectangle(root), width, height);
+	}
+
+	/**
+	 * The native draw's pixels of some child rectangles, read after the draw and before the
+	 * restore. It shares the probe's pool, so it is valid only until the next probe.
+	 */
+	static final class NativeCapture
+	{
+		private final int[] pool;
+		private final int[] candidates;
+		private final int[] offsets;
+		private final Rectangle[] bounds;
+		private final Rectangle root;
+		private final int canvasWidth;
+		private final int canvasHeight;
+
+		private NativeCapture(int[] pool, int[] candidates, int[] offsets, Rectangle[] bounds,
+			Rectangle root, int canvasWidth, int canvasHeight)
+		{
+			this.pool = pool;
+			this.candidates = candidates;
+			this.offsets = offsets;
+			this.bounds = bounds;
+			this.root = root;
+			this.canvasWidth = canvasWidth;
+			this.canvasHeight = canvasHeight;
+		}
+
+		/** The capture index of a candidate, or -1. */
+		int indexOf(int candidate)
+		{
+			for (int k = 0; k < candidates.length; k++)
+			{
+				if (candidates[k] == candidate)
+				{
+					return k;
+				}
+			}
+			return -1;
+		}
+
+		Rectangle bounds(int k)
+		{
+			return bounds[k];
+		}
+
+		/**
+		 * The pixel at {@code (dx, dy)} inside capture {@code k}'s rectangle drew only that menu:
+		 * on the canvas and outside the root, which native fills and writes only within its own
+		 * rectangle.
+		 */
+		boolean usable(int k, int dx, int dy)
+		{
+			int x = bounds[k].x + dx;
+			int y = bounds[k].y + dy;
+			return x >= 0 && y >= 0 && x < canvasWidth && y < canvasHeight && !root.contains(x, y);
+		}
+
+		int pixel(int k, int dx, int dy)
+		{
+			return pool[offsets[k] + dy * bounds[k].width + dx];
+		}
+
+		/** Every usable pixel was written by the native draw (none still holds the sentinel). */
+		boolean painted(int k)
+		{
+			Rectangle r = bounds[k];
+			for (int dy = 0; dy < r.height; dy++)
+			{
+				for (int dx = 0; dx < r.width; dx++)
+				{
+					if (usable(k, dx, dy) && pixel(k, dx, dy) == SENTINEL)
+					{
+						return false;
+					}
+				}
+			}
+			return true;
+		}
 	}
 
 	/** Pool growth: at least {@code needed}, otherwise doubling, never past {@code cap}. */
@@ -815,6 +967,8 @@ final class NativeSubmenuProbe
 		int footprintChangedPixels;
 		Rectangle footprintBounds;
 		ExactCoverageResolver.Outcome exact = ExactCoverageResolver.Outcome.NOT_EVALUATED;
+		/** The native pixels of resolved or alternative one-menu chains; null when none. */
+		NativeCapture nativeCapture;
 
 		/**
 		 * The framebuffer was restored exactly, no menu rectangle changed during the draw, and

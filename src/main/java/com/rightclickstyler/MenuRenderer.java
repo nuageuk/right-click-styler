@@ -54,6 +54,8 @@ final class MenuRenderer
 	private static final Color TEXT_SHADOW_COLOUR = Color.BLACK;
 	private static final Color HIT_ROW_COLOUR = Color.MAGENTA;
 	private static final int TEXT_SHADOW_OFFSET = 1;
+	private static final int NATIVE_HEADER_LEFT_INSET = 3;
+	private static final int SUBMENU_RIGHT_RESERVE = 16;
 	private static final int ICON_GAP = 1;
 	private static final int TEXT_EDGE_PADDING = 4;
 	private static final String ELLIPSIS = "...";
@@ -63,6 +65,8 @@ final class MenuRenderer
 	// Large enough that a big menu's entries all fit, so a full menu never thrashes the cache.
 	private static final int SEGMENT_CACHE_SIZE = 256;
 	private static final int MAX_ALPHA = 255;
+	private static final int MAX_CAPTURE_ROWS = 32;
+	private static final int MAX_CAPTURE_TEXT = 1024;
 	private static final double PERCENT = 100.0;
 
 	// Drop shadow: SHADOW_LAYERS offset copies, fading out with distance.
@@ -222,10 +226,8 @@ final class MenuRenderer
 			graphics.setColor(headerColour);
 			graphics.fillRect(bounds.x, bounds.y, bounds.width, HEADER_HEIGHT);
 			graphics.setFont(font);
-			int inset = Math.max(Math.max(TEXT_EDGE_PADDING, textOffsetX), theme.radius / 2 + 2);
 			drawHeader(graphics, headerText == null ? HEADER_TEXT : headerText,
-				headerText == null ? null : headerKind,
-				bounds.x + inset, bounds.x + bounds.width - inset - TEXT_SHADOW_OFFSET,
+				headerText == null ? null : headerKind, bounds,
 				bounds.y + centreOffset(HEADER_HEIGHT, baselineNudge));
 		}
 		drawRows(graphics, config, rows, bounds, hoverIndex,
@@ -260,11 +262,30 @@ final class MenuRenderer
 				graphics.drawRect(bounds.x, rowY, bounds.width - 1, ROW_HEIGHT - 1);
 			}
 			Row row = rows.get(rowIndex);
-			int startX = bounds.x + textOffsetX + (row.hasSubMenu && row.submenuOpensLeft ? 16 : 0);
-			int rightPadding = row.hasSubMenu && !row.submenuOpensLeft ? 17 : TEXT_EDGE_PADDING;
-			layoutRow(graphics, row, startX, rowY + rowTextOffsetY,
-				bounds.x + bounds.width - Math.max(rightPadding, textOffsetX)
-					- TEXT_SHADOW_OFFSET, hovered);
+			int startX = rowStartX(bounds, row);
+			int maxX = rowMaxX(bounds, row);
+			int available = maxX - startX;
+			int measured = layoutRow(null, row, 0, 0, Integer.MAX_VALUE, hovered);
+			if (shouldCompress(available, measured))
+			{
+				// The game's rectangle was sized with its own font. Keep its click and submenu
+				// geometry while fitting the selected font's complete row into that rectangle.
+				Graphics2D fitted = (Graphics2D) graphics.create();
+				try
+				{
+					fitted.translate(startX, 0);
+					fitted.scale((double) available / measured, 1);
+					layoutRow(fitted, row, 0, rowY + rowTextOffsetY, measured, hovered);
+				}
+				finally
+				{
+					fitted.dispose();
+				}
+			}
+			else
+			{
+				layoutRow(graphics, row, startX, rowY + rowTextOffsetY, maxX, hovered);
+			}
 			if (row.hasSubMenu)
 			{
 				boolean left = row.submenuOpensLeft;
@@ -276,6 +297,23 @@ final class MenuRenderer
 				graphics.drawLine(tipX, arrowY, arrowX, arrowY + 4);
 			}
 		}
+	}
+
+	private int rowStartX(Rectangle bounds, Row row)
+	{
+		return bounds.x + textOffsetX + (row.hasSubMenu && row.submenuOpensLeft ? 16 : 0);
+	}
+
+	private int rowMaxX(Rectangle bounds, Row row)
+	{
+		int rightPadding = row.hasSubMenu && !row.submenuOpensLeft
+			? SUBMENU_RIGHT_RESERVE : TEXT_EDGE_PADDING;
+		return bounds.x + bounds.width - Math.max(rightPadding, textOffsetX) - TEXT_SHADOW_OFFSET;
+	}
+
+	private static boolean shouldCompress(int available, int measured)
+	{
+		return available > 0 && measured > available;
 	}
 
 	/**
@@ -476,9 +514,215 @@ final class MenuRenderer
 		return (boxHeight - (metrics.getAscent() + metrics.getDescent())) / 2 + metrics.getAscent() + nudge;
 	}
 
-	private void drawHeader(Graphics2D graphics, String raw, TargetKind kind, int startX, int maxX, int y)
+	/** One opt-in diagnostic sample. Uses the same preparation and layoutRow calls as drawing. */
+	GeometryCapture inspectGeometry(Graphics2D graphics, Client client, Theme theme,
+		RightClickStylerConfig config, List<Row> rows, Rectangle bounds, int hoverIndex,
+		String headerText, String path, int canvasWidth, int canvasHeight)
 	{
-		if (raw.isEmpty() || startX >= maxX)
+		prepare(graphics, client, theme, config);
+		GeometryCapture capture = new GeometryCapture();
+		capture.path = path;
+		capture.build = System.getProperty("rightclickstyler.menuCaptureBuild", "dev-horizontal-scale");
+		capture.codeSource = MenuRenderer.class.getProtectionDomain().getCodeSource() == null
+			? "unknown" : MenuRenderer.class.getProtectionDomain().getCodeSource().getLocation().toString();
+		capture.menuX = bounds.x;
+		capture.menuY = bounds.y;
+		capture.menuWidth = bounds.width;
+		capture.menuHeight = bounds.height;
+		capture.canvasWidth = canvasWidth;
+		capture.canvasHeight = canvasHeight;
+		capture.themeFont = theme.font.name();
+		capture.configuredSize = theme.fontSize;
+		capture.opacity = theme.opacity;
+		capture.hoverOpacity = theme.hoverOpacity;
+		capture.radius = theme.radius;
+		capture.showHeader = theme.showHeader;
+		capture.hoverStyle = theme.hoverStyle.name();
+		capture.textOffsetX = textOffsetX;
+		capture.highlightsEnabled = config.highlightsEnabled();
+		capture.highlightsBold = config.highlightsBold();
+		capture.highlightRules = config.highlightRules();
+		capture.combatLevelMode = config.combatLevelMode().name();
+		capture.hoverIndex = hoverIndex;
+		capture.fontFamily = font.getFamily();
+		capture.fontName = font.getFontName();
+		capture.fontStyle = font.getStyle();
+		capture.fontSize = font.getSize();
+		capture.fontSize2D = font.getSize2D();
+		capture.ascent = metrics.getAscent();
+		capture.descent = metrics.getDescent();
+		capture.fontHeight = metrics.getHeight();
+		capture.graphicsScaleX = graphics.getTransform().getScaleX();
+		capture.graphicsScaleY = graphics.getTransform().getScaleY();
+		capture.truncatedRows = rows.size() > MAX_CAPTURE_ROWS;
+		IndexedSprite[] icons = client == null ? null : client.getModIcons();
+		if (icons != null)
+		{
+			for (int index = 0; index < Math.min(icons.length, 128); index++)
+			{
+				if (icons[index] != null)
+				{
+					capture.iconSizes.put(index,
+						new int[]{icons[index].getWidth(), icons[index].getHeight()});
+				}
+			}
+		}
+		String rawHeader = headerText == null ? HEADER_TEXT : headerText;
+		capture.header = inspectHeader(rawHeader, bounds);
+		for (int i = 0; i < Math.min(rows.size(), MAX_CAPTURE_ROWS); i++)
+		{
+			capture.rows.add(inspectRow(rows.get(i), bounds, i == hoverIndex));
+		}
+		return capture;
+	}
+
+	private GeometryCapture.Entry inspectHeader(String raw, Rectangle bounds)
+	{
+		GeometryCapture.Entry entry = new GeometryCapture.Entry();
+		entry.kind = "header";
+		entry.rawOption = captureText(raw, entry);
+		entry.nativeCombined = entry.rawOption;
+		entry.fontMetricsPlainWidth = metrics.stringWidth(Text.removeTags(raw));
+		for (Run run : optionSegments(raw).runs)
+		{
+			if (run.iconIndex >= 0)
+			{
+				entry.iconWidth += drawIcon(null, metrics, run.iconIndex, 0, 0);
+			}
+			else
+			{
+				entry.optionTextWidth += metrics.stringWidth(run.text);
+			}
+		}
+		entry.contentWidth = entry.optionTextWidth + entry.iconWidth;
+		int preferredInset = preferredHeaderInset();
+		boolean nativeInset = useNativeHeaderInset(entry.contentWidth, bounds.width, preferredInset);
+		entry.leftPadding = nativeInset ? Math.max(NATIVE_HEADER_LEFT_INSET, textOffsetX) : preferredInset;
+		entry.rightPadding = nativeInset ? Math.max(TEXT_EDGE_PADDING, textOffsetX) : preferredInset;
+		entry.shadowAllowance = TEXT_SHADOW_OFFSET;
+		entry.availableWidth = bounds.width - entry.leftPadding - entry.rightPadding - entry.shadowAllowance;
+		entry.unfittedOverflow = entry.contentWidth > entry.availableWidth;
+		entry.ellipsize = entry.unfittedOverflow
+			&& metrics.stringWidth(ELLIPSIS) <= entry.availableWidth;
+		entry.drop = entry.unfittedOverflow && !entry.ellipsize;
+		return entry;
+	}
+
+	private GeometryCapture.Entry inspectRow(Row row, Rectangle bounds, boolean hovered)
+	{
+		GeometryCapture.Entry entry = new GeometryCapture.Entry();
+		entry.kind = row.hasSubMenu ? "submenu" : row.target == null || row.target.isEmpty() ? "plain" : "optionTarget";
+		entry.rawOption = captureText(row.option, entry);
+		entry.rawTarget = captureText(row.target, entry);
+		entry.nativeCombined = (entry.rawOption == null ? "" : entry.rawOption)
+			+ (entry.rawTarget == null || entry.rawTarget.isEmpty() ? "" : " " + entry.rawTarget);
+		entry.fontMetricsPlainWidth = metrics.stringWidth(Text.removeTags(entry.nativeCombined));
+		entry.opensLeft = row.submenuOpensLeft;
+		entry.hovered = hovered;
+		entry.leftPadding = textOffsetX + (row.hasSubMenu && row.submenuOpensLeft ? 16 : 0);
+		entry.rightPadding = Math.max(row.hasSubMenu && !row.submenuOpensLeft
+			? SUBMENU_RIGHT_RESERVE : TEXT_EDGE_PADDING,
+			textOffsetX);
+		entry.arrowAllowance = row.hasSubMenu ? 16 : 0;
+		entry.shadowAllowance = TEXT_SHADOW_OFFSET;
+		entry.availableWidth = rowMaxX(bounds, row) - rowStartX(bounds, row);
+		entry.contentWidth = layoutRow(null, row, 0, 0, Integer.MAX_VALUE, hovered);
+		Row optionOnly = new Row(row.option, "", row.kind);
+		entry.optionWidth = layoutRow(null, optionOnly, 0, 0, Integer.MAX_VALUE, hovered);
+		entry.spacingWidth = entry.optionWidth > 0 && row.target != null && !row.target.isEmpty()
+			? metrics.charWidth(' ') : 0;
+		entry.targetWidth = entry.contentWidth - entry.optionWidth - entry.spacingWidth;
+		OptionSegments option = optionSegments(row.option);
+		boolean plainOption = (hovered && theme.hoverStyle == HoverStyle.TEXT) || rules.containsKey(option.key);
+		if (!plainOption)
+		{
+			for (Run run : option.runs)
+			{
+				if (run.iconIndex >= 0)
+				{
+					entry.optionIconWidth += drawIcon(null, optionMetricsFor(option), run.iconIndex, 0, 0);
+				}
+			}
+		}
+		if (row.target != null)
+		{
+			for (Run run : targetRuns(row.target))
+			{
+				if (run.iconIndex >= 0)
+				{
+					entry.targetIconWidth += drawIcon(null, metrics, run.iconIndex, 0, 0);
+				}
+			}
+		}
+		entry.iconWidth = entry.optionIconWidth + entry.targetIconWidth;
+		entry.optionTextWidth = entry.optionWidth - entry.optionIconWidth;
+		entry.targetTextWidth = entry.targetWidth - entry.targetIconWidth;
+		entry.unfittedOverflow = entry.contentWidth > entry.availableWidth;
+		entry.legacyEllipsizeOrDrop = entry.unfittedOverflow;
+		entry.compress = shouldCompress(entry.availableWidth, entry.contentWidth);
+		entry.compressionRatio = entry.compress ? (double) entry.availableWidth / entry.contentWidth : 1.0;
+		entry.drop = !entry.compress && entry.unfittedOverflow;
+		return entry;
+	}
+
+	private FontMetrics optionMetricsFor(OptionSegments option)
+	{
+		return rules.containsKey(option.key) ? highlightMetrics : metrics;
+	}
+
+	private static String captureText(String raw, GeometryCapture.Entry entry)
+	{
+		if (raw != null && raw.length() > MAX_CAPTURE_TEXT)
+		{
+			entry.rawTruncated = true;
+			return Limits.truncate(raw, MAX_CAPTURE_TEXT);
+		}
+		return raw;
+	}
+
+	static final class GeometryCapture
+	{
+		int schema = 1;
+		String path, build, codeSource, themeFont, hoverStyle, fontFamily, fontName,
+			highlightRules, combatLevelMode;
+		int menuX, menuY, menuWidth, menuHeight, canvasWidth, canvasHeight, configuredSize,
+			opacity, hoverOpacity, radius, textOffsetX, hoverIndex, fontStyle, fontSize,
+			ascent, descent, fontHeight;
+		float fontSize2D;
+		double graphicsScaleX, graphicsScaleY;
+		boolean showHeader, highlightsEnabled, highlightsBold, truncatedRows;
+		Entry header;
+		List<Entry> rows = new ArrayList<>();
+		Map<Integer, int[]> iconSizes = new HashMap<>();
+
+		static final class Entry
+		{
+			String kind, rawOption, rawTarget, nativeCombined;
+			int fontMetricsPlainWidth, leftPadding, rightPadding, shadowAllowance, arrowAllowance,
+				availableWidth, contentWidth, optionWidth, targetWidth, optionTextWidth, spacingWidth,
+				iconWidth, optionIconWidth, targetIconWidth, targetTextWidth;
+			boolean opensLeft, hovered, rawTruncated, legacyEllipsizeOrDrop, compress,
+				ellipsize, drop, unfittedOverflow;
+			double compressionRatio;
+		}
+	}
+
+	private int preferredHeaderInset()
+	{
+		return Math.max(Math.max(TEXT_EDGE_PADDING, textOffsetX), theme.radius / 2 + 2);
+	}
+
+	private boolean useNativeHeaderInset(int fullWidth, int boxWidth, int preferredInset)
+	{
+		int preferredAvailable = boxWidth - preferredInset * 2 - TEXT_SHADOW_OFFSET;
+		int nativeAvailable = boxWidth - Math.max(NATIVE_HEADER_LEFT_INSET, textOffsetX)
+			- Math.max(TEXT_EDGE_PADDING, textOffsetX) - TEXT_SHADOW_OFFSET;
+		return fullWidth > preferredAvailable && fullWidth <= nativeAvailable;
+	}
+
+	private void drawHeader(Graphics2D graphics, String raw, TargetKind kind, Rectangle bounds, int y)
+	{
+		if (raw.isEmpty())
 		{
 			return;
 		}
@@ -489,6 +733,16 @@ final class MenuRenderer
 			fullWidth += run.iconIndex >= 0
 				? drawIcon(null, metrics, run.iconIndex, 0, 0)
 				: metrics.stringWidth(run.text);
+		}
+		int preferredInset = preferredHeaderInset();
+		boolean nativeInset = useNativeHeaderInset(fullWidth, bounds.width, preferredInset);
+		int startX = bounds.x + (nativeInset ? Math.max(NATIVE_HEADER_LEFT_INSET, textOffsetX) : preferredInset);
+		int maxX = bounds.x + bounds.width
+			- (nativeInset ? Math.max(TEXT_EDGE_PADDING, textOffsetX) : preferredInset)
+			- TEXT_SHADOW_OFFSET;
+		if (startX >= maxX)
+		{
+			return;
 		}
 		int available = maxX - startX;
 		boolean truncated = fullWidth > available;

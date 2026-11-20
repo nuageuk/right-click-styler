@@ -172,47 +172,138 @@ final class SubmenuImageCache
 			{
 				return Miss.REGION;
 			}
-			if (menus.length != other.menus.length)
-			{
-				return Miss.CHAIN;
-			}
-			Miss found = Miss.HIT;
-			for (int depth = 0; depth < menus.length && found == Miss.HIT; depth++)
-			{
-				Menu a = menus[depth];
-				Menu b = other.menus[depth];
-				if (!a.bounds.equals(b.bounds))
-				{
-					found = Miss.BOUNDS;
-				}
-				else if (!Objects.equals(a.header, b.header) || a.headerKind != b.headerKind)
-				{
-					found = Miss.HEADER;
-				}
-				else if (a.scroll != b.scroll)
-				{
-					found = Miss.SCROLL;
-				}
-				else if (!Arrays.equals(a.options, b.options) || !Arrays.equals(a.targets, b.targets)
-					|| !Arrays.equals(a.flags, b.flags))
-				{
-					found = Miss.ROWS;
-				}
-			}
-			if (found != Miss.HIT)
-			{
-				return found;
-			}
-			// Hover last: when everything else matches, it alone decides.
-			for (int depth = 0; depth < menus.length; depth++)
-			{
-				if (menus[depth].hovered != other.menus[depth].hovered)
-				{
-					return Miss.HOVER;
-				}
-			}
-			return Miss.HIT;
+			return menusDifference(menus, other.menus);
 		}
+	}
+
+	/**
+	 * The first per-menu input class that differs between two drawn chains, HIT when the
+	 * renderer would receive equal inputs for every menu. With one theme, config, icon source
+	 * and level, HIT means the two chains render identical pixels: the same rule that lets the
+	 * cache reuse an image. Callbacks and entry identity are deliberately not inputs.
+	 */
+	static Miss menusDifference(Menu[] menus, Menu[] other)
+	{
+		if (menus.length != other.length)
+		{
+			return Miss.CHAIN;
+		}
+		Miss found = Miss.HIT;
+		for (int depth = 0; depth < menus.length && found == Miss.HIT; depth++)
+		{
+			Menu a = menus[depth];
+			Menu b = other[depth];
+			if (!a.bounds.equals(b.bounds))
+			{
+				found = Miss.BOUNDS;
+			}
+			else if (!Objects.equals(a.header, b.header) || a.headerKind != b.headerKind)
+			{
+				found = Miss.HEADER;
+			}
+			else if (a.scroll != b.scroll)
+			{
+				found = Miss.SCROLL;
+			}
+			else if (!Arrays.equals(a.options, b.options) || !Arrays.equals(a.targets, b.targets)
+				|| !Arrays.equals(a.flags, b.flags))
+			{
+				found = Miss.ROWS;
+			}
+		}
+		if (found != Miss.HIT)
+		{
+			return found;
+		}
+		// Hover last: when everything else matches, it alone decides.
+		for (int depth = 0; depth < menus.length; depth++)
+		{
+			if (menus[depth].hovered != other[depth].hovered)
+			{
+				return Miss.HOVER;
+			}
+		}
+		return Miss.HIT;
+	}
+
+	/**
+	 * Diagnostics only: the first input that differs between two drawn chains, with its depth,
+	 * row and both values, in the order {@link #menusDifference} checks them; null when equal.
+	 */
+	static String describeDifference(Menu[] menus, Menu[] other)
+	{
+		Miss miss = menusDifference(menus, other);
+		if (miss == Miss.HIT)
+		{
+			return null;
+		}
+		if (miss == Miss.CHAIN)
+		{
+			return "CHAIN depth " + (menus.length - 1) + " vs " + (other.length - 1);
+		}
+		for (int depth = 0; depth < menus.length; depth++)
+		{
+			Menu a = menus[depth];
+			Menu b = other[depth];
+			String prefix = miss + " depth=" + depth;
+			switch (miss)
+			{
+				case BOUNDS:
+					if (!a.bounds.equals(b.bounds))
+					{
+						return prefix + " " + text(a.bounds) + " vs " + text(b.bounds);
+					}
+					break;
+				case HEADER:
+					if (!Objects.equals(a.header, b.header) || a.headerKind != b.headerKind)
+					{
+						return prefix + " '" + a.header + "'/" + a.headerKind + " vs '" + b.header + "'/" + b.headerKind;
+					}
+					break;
+				case SCROLL:
+					if (a.scroll != b.scroll)
+					{
+						return prefix + " " + a.scroll + " vs " + b.scroll;
+					}
+					break;
+				case HOVER:
+					if (a.hovered != b.hovered)
+					{
+						return prefix + " " + a.hovered + " vs " + b.hovered;
+					}
+					break;
+				case ROWS:
+					if (a.options.length != b.options.length)
+					{
+						return prefix + " count " + a.options.length + " vs " + b.options.length;
+					}
+					for (int row = 0; row < a.options.length; row++)
+					{
+						if (!Objects.equals(a.options[row], b.options[row]))
+						{
+							return prefix + " row=" + row + " option '" + a.options[row] + "' vs '" + b.options[row] + "'";
+						}
+						if (!Objects.equals(a.targets[row], b.targets[row]))
+						{
+							return prefix + " row=" + row + " target '" + a.targets[row] + "' vs '" + b.targets[row] + "'";
+						}
+						if (a.flags[row] != b.flags[row])
+						{
+							return prefix + " row=" + row + " flags(kind<<2|arrow<<1|arrowLeft) "
+								+ a.flags[row] + " vs " + b.flags[row];
+						}
+					}
+					break;
+				default:
+					break;
+			}
+		}
+		return miss.name();
+	}
+
+	private static String text(Rectangle r)
+	{
+		return r.x + "," + r.y + "," + r.width + "x" + r.height;
 	}
 
 	static int configItemCount()
