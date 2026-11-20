@@ -5,6 +5,7 @@ import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.Rectangle;
+import java.awt.RenderingHints;
 import java.awt.Shape;
 import java.awt.geom.RoundRectangle2D;
 import java.awt.image.BufferedImage;
@@ -272,6 +273,7 @@ final class MenuRenderer
 				{
 					fitted.translate(startX, 0);
 					fitted.scale((double) available / measured, 1);
+					keepRunScaleProportional(fitted);
 					layoutRow(fitted, row, 0, rowY + rowTextOffsetY, measured, hovered);
 				}
 				finally
@@ -285,11 +287,10 @@ final class MenuRenderer
 			}
 			if (row.hasSubMenu)
 			{
-				boolean left = row.submenuOpensLeft;
-				int arrowX = left ? bounds.x + 9 : bounds.x + bounds.width - 9;
+				int arrowX = bounds.x + bounds.width - 9;
 				int arrowY = rowY + ROW_HEIGHT / 2;
 				graphics.setColor(hovered ? theme.accent : theme.text);
-				int tipX = arrowX + (left ? -4 : 4);
+				int tipX = arrowX + 4;
 				graphics.drawLine(arrowX, arrowY - 4, tipX, arrowY);
 				graphics.drawLine(tipX, arrowY, arrowX, arrowY + 4);
 			}
@@ -298,12 +299,12 @@ final class MenuRenderer
 
 	private int rowStartX(Rectangle bounds, Row row)
 	{
-		return bounds.x + textOffsetX + (row.hasSubMenu && row.submenuOpensLeft ? 16 : 0);
+		return bounds.x + textOffsetX;
 	}
 
 	private int rowMaxX(Rectangle bounds, Row row)
 	{
-		return row.hasSubMenu && !row.submenuOpensLeft
+		return row.hasSubMenu
 			? bounds.x + bounds.width - Math.max(SUBMENU_RIGHT_RESERVE, textOffsetX) - TEXT_SHADOW_OFFSET
 			: plainMaxX(bounds);
 	}
@@ -312,6 +313,20 @@ final class MenuRenderer
 	private int plainMaxX(Rectangle bounds)
 	{
 		return bounds.x + bounds.width - Math.max(TEXT_EDGE_PADDING, textOffsetX) - TEXT_SHADOW_OFFSET;
+	}
+
+	/**
+	 * The RuneScape fonts are pixel fonts whose hinting snaps a horizontally scaled glyph to the
+	 * next whole pixel size, so a fit of even 1px drew every glyph about 6% narrower while each run
+	 * still started at its scaled position, opening gaps between option, target and coloured spans.
+	 * Fractional metrics keep their advances at the scaled measured widths.
+	 */
+	private void keepRunScaleProportional(Graphics2D fitted)
+	{
+		if (!theme.font.isScalable())
+		{
+			fitted.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON);
+		}
 	}
 
 	private static boolean shouldCompress(int available, int measured)
@@ -543,6 +558,7 @@ final class MenuRenderer
 			{
 				fitted.translate(startX, 0);
 				fitted.scale((double) available / measured, 1);
+				keepRunScaleProportional(fitted);
 				layoutHeader(fitted, runs, kind, 0, y);
 			}
 			finally

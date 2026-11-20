@@ -21,7 +21,10 @@
 ### Fixed
 
 - Item target colours in submenu headers and copied inventory submenu entries.
-- Menu header alignment and text fitting, and submenu arrow positioning.
+- Menu header alignment and text fitting.
+- Submenu arrows are always right-aligned, and rows whose submenu opens to the left keep the same text alignment as other rows.
+- Uneven gaps between option, target and coloured text when a RuneScape-font row is narrowed to fit the native menu width.
+- Custom Item target colours for worn items in the Equipment tab, including actions in their submenus.
 
 ### Compatibility
 
@@ -33,7 +36,8 @@
 
 - Exceptionally large menus may reduce FPS while open.
 - Some third-party visuals, including ground-item icons, are not reproduced by the styled renderer.
-- The macOS Unicode rendering issue remains unresolved.
+- macOS symbol rendering is unconfirmed. The built-in theme lock, which macOS showed as a missing-character box, is now drawn as an icon, but this release has been tested only on Windows.
+- Reported inconsistencies with Inventory Setups potion withdrawals, the Max cape and fairy rings have not been confirmed as fixed.
 - Submenus use native styling when their draw cannot be verified.
 
 ## [1.0.0] — 2026-11-16

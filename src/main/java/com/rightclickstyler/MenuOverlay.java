@@ -16,6 +16,8 @@ import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.Player;
 import net.runelite.api.Point;
+import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.widgets.Widget;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
@@ -1379,7 +1381,7 @@ class MenuOverlay extends Overlay
 		{
 			return MenuRenderer.TargetKind.OBJECT;
 		}
-		if (isGroundItemAction(type) || entry.getItemId() != NO_ITEM)
+		if (isGroundItemAction(type) || heldItemId(entry) != NO_ITEM)
 		{
 			return MenuRenderer.TargetKind.ITEM;
 		}
@@ -1409,7 +1411,7 @@ class MenuOverlay extends Overlay
 				continue;
 			}
 			MenuRenderer.TargetKind candidateKind = classify(candidate);
-			if (candidateKind == MenuRenderer.TargetKind.ITEM && candidate.getItemId() != NO_ITEM)
+			if (candidateKind == MenuRenderer.TargetKind.ITEM && heldItemId(candidate) != NO_ITEM)
 			{
 				itemOwner = true;
 			}
@@ -1419,6 +1421,50 @@ class MenuOverlay extends Overlay
 			}
 		}
 		return itemOwner ? MenuRenderer.TargetKind.ITEM : own;
+	}
+
+	/**
+	 * Container ops carry their item's id. A worn equipment slot's ops belong to the slot layer,
+	 * which holds no item of its own, so the worn item is read from the slot's item child, as
+	 * RuneLite's Menu Entry Swapper does.
+	 */
+	static int heldItemId(MenuEntry entry)
+	{
+		int itemId = entry.getItemId();
+		MenuAction type = entry.getType();
+		if (itemId != NO_ITEM || (type != MenuAction.CC_OP && type != MenuAction.CC_OP_LOW_PRIORITY))
+		{
+			return itemId;
+		}
+		Widget slot = entry.getWidget();
+		if (slot == null || !isWornEquipmentSlot(slot.getId()))
+		{
+			return NO_ITEM;
+		}
+		Widget item = slot.getChild(1);
+		return item != null && item.getItemId() > NO_ITEM ? item.getItemId() : NO_ITEM;
+	}
+
+	/** The equipment tab's eleven worn slots; its buttons and other components are not items. */
+	static boolean isWornEquipmentSlot(int componentId)
+	{
+		switch (componentId)
+		{
+			case InterfaceID.Wornitems.SLOT0:
+			case InterfaceID.Wornitems.SLOT1:
+			case InterfaceID.Wornitems.SLOT2:
+			case InterfaceID.Wornitems.SLOT3:
+			case InterfaceID.Wornitems.SLOT4:
+			case InterfaceID.Wornitems.SLOT5:
+			case InterfaceID.Wornitems.SLOT7:
+			case InterfaceID.Wornitems.SLOT9:
+			case InterfaceID.Wornitems.SLOT10:
+			case InterfaceID.Wornitems.SLOT12:
+			case InterfaceID.Wornitems.SLOT13:
+				return true;
+			default:
+				return false;
+		}
 	}
 
 	static boolean isGameObjectAction(MenuAction type)
