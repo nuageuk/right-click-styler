@@ -38,7 +38,6 @@ tasks.withType(JavaCompile).configureEach {
 // -PwriteProbeGolden=<path> regenerates the probe semantics golden file instead of checking it.
 tasks.withType(Test).configureEach {
 	systemProperty 'rightclickstyler.writeProbeGolden', project.findProperty('writeProbeGolden') ?: ''
-	systemProperty 'rightclickstyler.menuGeometryReplay', project.findProperty('menuGeometryReplay') ?: ''
 	systemProperty 'rightclickstyler.submenuTrace', project.hasProperty('submenuTrace') ? 'true' : 'false'
 	outputs.upToDateWhen { !project.hasProperty('writeProbeGolden') }
 }
