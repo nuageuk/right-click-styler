@@ -1,0 +1,49 @@
+// Adds the Right Click Styler regression-test setup to the release build without editing
+// build.gradle, so the Plugin Hub build files stay exactly as released.
+//
+//   ./gradlew -I qa/regression-tests.init.gradle test
+//
+// It adds JUnit 4.12, the RuneLite client and RuneLite's jshell as test-only dependencies,
+// pins every RuneLite artifact to the version the v1.1.0 release was verified and packaged
+// against (build.gradle's `latest.release` included, as the Plugin Hub packager does), passes
+// the two test switches below, and registers the usual plugin-template `run` task.
+allprojects {
+	pluginManager.withPlugin('java') {
+		def runeLiteVersion = '1.13.7'
+		def pluginMainClass = 'com.rightclickstyler.RightClickStylerPluginTest'
+
+		configurations.configureEach {
+			resolutionStrategy.eachDependency { details ->
+				if (details.requested.group == 'net.runelite'
+					&& details.requested.name in ['client', 'runelite-api', 'jshell']) {
+					details.useVersion runeLiteVersion
+				}
+			}
+		}
+
+		dependencies {
+			testImplementation 'junit:junit:4.12'
+			testImplementation group: 'net.runelite', name: 'client', version: runeLiteVersion
+			testImplementation group: 'net.runelite', name: 'jshell', version: runeLiteVersion
+		}
+
+		tasks.withType(Test).configureEach {
+			// -PwriteProbeGolden=<file> or <file>|<stress file> regenerates the probe golden files
+			// instead of checking them. Never pass it for verification runs.
+			systemProperty 'rightclickstyler.writeProbeGolden', project.findProperty('writeProbeGolden') ?: ''
+			systemProperty 'rightclickstyler.submenuTrace', project.hasProperty('submenuTrace') ? 'true' : 'false'
+			outputs.upToDateWhen { !project.hasProperty('writeProbeGolden') }
+		}
+
+		tasks.register('run', JavaExec) {
+			classpath = sourceSets.test.runtimeClasspath
+			mainClass = pluginMainClass
+
+			jvmArgs '-ea'
+			if (project.hasProperty('submenuTrace')) {
+				jvmArgs '-Drightclickstyler.submenuTrace=true'
+			}
+			args '--developer-mode', '--debug'
+		}
+	}
+}
