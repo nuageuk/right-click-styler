@@ -56,6 +56,115 @@ public class MenuHeaderGeometryTest
 		assertFullHeader(theme, header, width, 0, width + 1, "Attack");
 	}
 
+	/**
+	 * The game draws its header at its rows' x. A header is therefore drawn exactly as a plain
+	 * row with the same text is: at the same x, and fitted the same way when the text box is too
+	 * small, instead of being inset by the corner radius or cut short with an ellipsis.
+	 */
+	@Test
+	public void headerIsDrawnAndFittedLikeAPlainRowWithTheSameText()
+	{
+		String text = "Choose Option";
+		for (FontChoice font : FontChoice.values())
+		{
+			for (int radius : new int[]{0, 6, 8})
+			{
+				for (int offset : new int[]{0, 3, 10, 20})
+				{
+					RightClickStylerConfig config = textOffset(offset);
+					Theme theme = theme(font, 100).withRadius(radius).withTextShadow(false);
+					int tight = measuredHeaderWidth(theme(FontChoice.RS_BOLD, 100), text) + 8;
+					for (int width : new int[]{tight, tight + 80})
+					{
+						String where = font + " radius=" + radius + " offset=" + offset + " width=" + width;
+						MenuRenderer.Row row = new MenuRenderer.Row(text, "", MenuRenderer.TargetKind.OTHER);
+						Rectangle bounds = new Rectangle(10, 10, width, 37);
+						BufferedImage image = new BufferedImage(width + 20, 60, BufferedImage.TYPE_INT_ARGB);
+						Graphics2D graphics = image.createGraphics();
+						try
+						{
+							new MenuRenderer().render(graphics, null, theme, config,
+								Collections.singletonList(row), bounds, -1, 0, text);
+						}
+						finally
+						{
+							graphics.dispose();
+						}
+						Rectangle header = new Rectangle(bounds.x, bounds.y, width, MenuRenderer.HEADER_HEIGHT);
+						Rectangle rowArea = new Rectangle(bounds.x, bounds.y + MenuRenderer.HEADER_HEIGHT,
+							width, bounds.height - MenuRenderer.HEADER_HEIGHT);
+						int rowColour = theme.text.getRGB();
+						assertEquals("header starts at the row's x: " + where,
+							leftmost(image, rowArea, rowColour), leftmost(image, header, HEADER_TEXT.getRGB()));
+						assertArrayEquals("header fitted like the row: " + where,
+							mask(image, rowArea, rowColour), mask(image, header, HEADER_TEXT.getRGB()));
+						assertEquals("outside native menu right edge: " + where, 0, image.getRGB(bounds.x + width, 20));
+					}
+				}
+			}
+		}
+	}
+
+	private static RightClickStylerConfig textOffset(int offset)
+	{
+		return new RightClickStylerConfig()
+		{
+			@Override
+			public int textOffsetX()
+			{
+				return offset;
+			}
+		};
+	}
+
+	private static int leftmost(BufferedImage image, Rectangle area, int colour)
+	{
+		for (int x = area.x; x < area.x + area.width; x++)
+		{
+			for (int y = area.y; y < area.y + area.height; y++)
+			{
+				if (image.getRGB(x, y) == colour)
+				{
+					return x;
+				}
+			}
+		}
+		return -1;
+	}
+
+	/** A position-independent bitmap of one colour's pixels within {@code area}. */
+	private static boolean[] mask(BufferedImage image, Rectangle area, int colour)
+	{
+		int minX = Integer.MAX_VALUE;
+		int minY = Integer.MAX_VALUE;
+		int maxX = -1;
+		int maxY = -1;
+		for (int y = area.y; y < area.y + area.height; y++)
+		{
+			for (int x = area.x; x < area.x + area.width; x++)
+			{
+				if (image.getRGB(x, y) == colour)
+				{
+					minX = Math.min(minX, x);
+					minY = Math.min(minY, y);
+					maxX = Math.max(maxX, x);
+					maxY = Math.max(maxY, y);
+				}
+			}
+		}
+		assertTrue("text is present", maxX >= 0);
+		int width = maxX - minX + 1;
+		boolean[] pixels = new boolean[width * (maxY - minY + 1)];
+		for (int y = minY; y <= maxY; y++)
+		{
+			for (int x = minX; x <= maxX; x++)
+			{
+				pixels[(y - minY) * width + x - minX] = image.getRGB(x, y) == colour;
+			}
+		}
+		return pixels;
+	}
+
 	private static Theme theme(FontChoice font, int opacity)
 	{
 		return BuiltInThemes.find("dark").withFont(font).withFontSize(13)

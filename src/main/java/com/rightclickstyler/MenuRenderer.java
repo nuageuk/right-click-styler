@@ -54,7 +54,6 @@ final class MenuRenderer
 	private static final Color TEXT_SHADOW_COLOUR = Color.BLACK;
 	private static final Color HIT_ROW_COLOUR = Color.MAGENTA;
 	private static final int TEXT_SHADOW_OFFSET = 1;
-	private static final int NATIVE_HEADER_LEFT_INSET = 3;
 	private static final int SUBMENU_RIGHT_RESERVE = 16;
 	private static final int ICON_GAP = 1;
 	private static final int TEXT_EDGE_PADDING = 4;
@@ -304,9 +303,15 @@ final class MenuRenderer
 
 	private int rowMaxX(Rectangle bounds, Row row)
 	{
-		int rightPadding = row.hasSubMenu && !row.submenuOpensLeft
-			? SUBMENU_RIGHT_RESERVE : TEXT_EDGE_PADDING;
-		return bounds.x + bounds.width - Math.max(rightPadding, textOffsetX) - TEXT_SHADOW_OFFSET;
+		return row.hasSubMenu && !row.submenuOpensLeft
+			? bounds.x + bounds.width - Math.max(SUBMENU_RIGHT_RESERVE, textOffsetX) - TEXT_SHADOW_OFFSET
+			: plainMaxX(bounds);
+	}
+
+	/** The right edge of text in a row without a right-hand submenu arrow, and in the header. */
+	private int plainMaxX(Rectangle bounds)
+	{
+		return bounds.x + bounds.width - Math.max(TEXT_EDGE_PADDING, textOffsetX) - TEXT_SHADOW_OFFSET;
 	}
 
 	private static boolean shouldCompress(int available, int measured)
@@ -512,19 +517,11 @@ final class MenuRenderer
 		return (boxHeight - (metrics.getAscent() + metrics.getDescent())) / 2 + metrics.getAscent() + nudge;
 	}
 
-	private int preferredHeaderInset()
-	{
-		return Math.max(Math.max(TEXT_EDGE_PADDING, textOffsetX), theme.radius / 2 + 2);
-	}
-
-	private boolean useNativeHeaderInset(int fullWidth, int boxWidth, int preferredInset)
-	{
-		int preferredAvailable = boxWidth - preferredInset * 2 - TEXT_SHADOW_OFFSET;
-		int nativeAvailable = boxWidth - Math.max(NATIVE_HEADER_LEFT_INSET, textOffsetX)
-			- Math.max(TEXT_EDGE_PADDING, textOffsetX) - TEXT_SHADOW_OFFSET;
-		return fullWidth > preferredAvailable && fullWidth <= nativeAvailable;
-	}
-
+	/**
+	 * The game draws its header at the same x as its rows, in a rectangle sized to fit it, so the
+	 * header shares a plain row's text box and is fitted the same way when the selected font or
+	 * text offset needs more room than that box.
+	 */
 	private void drawHeader(Graphics2D graphics, String raw, TargetKind kind, Rectangle bounds, int y)
 	{
 		if (raw.isEmpty())
@@ -532,59 +529,48 @@ final class MenuRenderer
 			return;
 		}
 		List<Run> runs = optionSegments(raw).runs;
-		int fullWidth = 0;
-		for (Run run : runs)
-		{
-			fullWidth += run.iconIndex >= 0
-				? drawIcon(null, metrics, run.iconIndex, 0, 0)
-				: metrics.stringWidth(run.text);
-		}
-		int preferredInset = preferredHeaderInset();
-		boolean nativeInset = useNativeHeaderInset(fullWidth, bounds.width, preferredInset);
-		int startX = bounds.x + (nativeInset ? Math.max(NATIVE_HEADER_LEFT_INSET, textOffsetX) : preferredInset);
-		int maxX = bounds.x + bounds.width
-			- (nativeInset ? Math.max(TEXT_EDGE_PADDING, textOffsetX) : preferredInset)
-			- TEXT_SHADOW_OFFSET;
-		if (startX >= maxX)
+		int startX = bounds.x + textOffsetX;
+		int available = plainMaxX(bounds) - startX;
+		if (available <= 0)
 		{
 			return;
 		}
-		int available = maxX - startX;
-		boolean truncated = fullWidth > available;
-		int ellipsisWidth = metrics.stringWidth(ELLIPSIS);
-		if (truncated && ellipsisWidth > available)
+		int measured = layoutHeader(null, runs, kind, 0, y);
+		if (shouldCompress(available, measured))
 		{
-			return;
+			Graphics2D fitted = (Graphics2D) graphics.create();
+			try
+			{
+				fitted.translate(startX, 0);
+				fitted.scale((double) available / measured, 1);
+				layoutHeader(fitted, runs, kind, 0, y);
+			}
+			finally
+			{
+				fitted.dispose();
+			}
 		}
-		int contentMax = truncated ? maxX - ellipsisWidth : maxX;
+		else
+		{
+			layoutHeader(graphics, runs, kind, startX, y);
+		}
+	}
+
+	/**
+	 * Draws the header's runs, or only measures them when {@code graphics} is null.
+	 *
+	 * @return the header's width
+	 */
+	private int layoutHeader(Graphics2D graphics, List<Run> runs, TargetKind kind, int startX, int y)
+	{
 		int x = startX;
 		for (Run run : runs)
 		{
-			if (x >= contentMax)
-			{
-				break;
-			}
-			if (run.iconIndex >= 0)
-			{
-				int iconWidth = drawIcon(null, metrics, run.iconIndex, x, y);
-				if (x + iconWidth > contentMax)
-				{
-					break;
-				}
-				x += drawIcon(graphics, metrics, run.iconIndex, x, y);
-				continue;
-			}
-			String visible = fitPrefix(run.text, metrics, contentMax - x);
-			x += drawRun(graphics, metrics, visible, x, y, headerRunColour(run, kind));
-			if (visible.length() < run.text.length())
-			{
-				break;
-			}
+			x += run.iconIndex >= 0
+				? drawIcon(graphics, metrics, run.iconIndex, x, y)
+				: drawRun(graphics, metrics, run.text, x, y, graphics == null ? null : headerRunColour(run, kind));
 		}
-		if (truncated)
-		{
-			drawRun(graphics, metrics, ELLIPSIS, x, y, theme.headerText);
-		}
+		return x - startX;
 	}
 
 	/**
