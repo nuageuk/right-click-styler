@@ -87,6 +87,79 @@ public class MenuRendererGeometryTest
 		}
 	}
 
+	/**
+	 * Without the optional drop shadow, nothing the renderer draws (header, rows, hover, arrows,
+	 * text shadow, border) reaches outside the game's own menu rectangle, whatever the font,
+	 * text offset, baseline nudge or hover style.
+	 */
+	@Test
+	public void nothingIsPaintedOutsideTheNativeRectangleAcrossSettings()
+	{
+		MenuRenderer.Row plain = new MenuRenderer.Row("<col=ff0000>Inspect</col> the enchanted artifact",
+			"<col=00ff00>END</col> (level-126)", MenuRenderer.TargetKind.NPC);
+		MenuRenderer.Row right = new MenuRenderer.Row("Swap shift-click", "<col=ff9040>Saw", MenuRenderer.TargetKind.ITEM);
+		right.set(right.option(), right.target(), right.kind(), true, false);
+		MenuRenderer.Row left = new MenuRenderer.Row("Swap left-click", "<col=ff9040>Saw", MenuRenderer.TargetKind.ITEM);
+		left.set(left.option(), left.target(), left.kind(), true, true);
+		java.util.List<MenuRenderer.Row> rows = Arrays.asList(plain, right, left);
+		Rectangle bounds = new Rectangle(12, 12, 96, 22 + 15 * rows.size());
+		for (FontChoice font : FontChoice.values())
+		{
+			for (int size : new int[]{Limits.MIN_FONT_SIZE, Limits.MAX_FONT_SIZE})
+			{
+				for (int offset : new int[]{Limits.MIN_TEXT_OFFSET_X, 3, Limits.MAX_TEXT_OFFSET_X})
+				{
+					for (int nudge : new int[]{Limits.MIN_BASELINE_NUDGE, 0, Limits.MAX_BASELINE_NUDGE})
+					{
+						for (HoverStyle hover : HoverStyle.values())
+						{
+							Theme theme = BuiltInThemes.find("dark").withFont(font).withFontSize(size)
+								.withRadius(Limits.MAX_RADIUS).withHoverStyle(hover).withOpacity(100)
+								.withShowBorder(true).withShowShadow(false).withTextShadow(true);
+							RightClickStylerConfig config = new RightClickStylerConfig()
+							{
+								@Override
+								public int textOffsetX()
+								{
+									return offset;
+								}
+
+								@Override
+								public int baselineNudge()
+								{
+									return nudge;
+								}
+							};
+							BufferedImage image = new BufferedImage(bounds.x * 2 + bounds.width,
+								bounds.y * 2 + bounds.height, BufferedImage.TYPE_INT_ARGB);
+							Graphics2D graphics = image.createGraphics();
+							try
+							{
+								new MenuRenderer().render(graphics, null, theme, config, rows, bounds, 1, 0,
+									"<col=ff9040>Captured wind mote of the enchanted artifact</col>");
+							}
+							finally
+							{
+								graphics.dispose();
+							}
+							for (int y = 0; y < image.getHeight(); y++)
+							{
+								for (int x = 0; x < image.getWidth(); x++)
+								{
+									if (!bounds.contains(x, y))
+									{
+										assertEquals(font + " size=" + size + " offset=" + offset + " nudge=" + nudge
+											+ " hover=" + hover + " at " + x + "," + y, 0, image.getRGB(x, y));
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	private static int measuredWidth(Theme theme, MenuRenderer.Row row)
 	{
 		BufferedImage image = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB);
