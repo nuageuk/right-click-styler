@@ -91,7 +91,6 @@ class MenuOverlay extends Overlay
 		FALLBACK_RENDER_EXCEPTION,
 		FALLBACK_PROBE_EXCEPTION,
 		FALLBACK_SCROLLABLE,
-		FALLBACK_ALREADY_CONSUMED,
 		FALLBACK_TRANSIENT,
 		/** The exact reading was unevidenced, unexplained or failed. */
 		FALLBACK_EXACT_UNRESOLVED,
@@ -221,11 +220,6 @@ class MenuOverlay extends Overlay
 		{
 			traceSwap("external-consume", "BeforeMenuRender consumed before Right Click Styler");
 		}
-	}
-
-	synchronized void recordAlreadyConsumedSubmenu()
-	{
-		recordOutcome(SubmenuOutcome.FALLBACK_ALREADY_CONSUMED);
 	}
 
 	private void recordOutcome(SubmenuOutcome outcome)

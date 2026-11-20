@@ -3,7 +3,6 @@ package com.rightclickstyler;
 import com.google.inject.Provides;
 import javax.inject.Inject;
 import javax.swing.SwingUtilities;
-import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
@@ -28,7 +27,6 @@ import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.ui.overlay.OverlayManager;
 import net.runelite.client.util.ImageUtil;
 
-@Slf4j
 @PluginDescriptor(
 	name = RightClickStylerPlugin.NAME
 )
@@ -164,11 +162,6 @@ public class RightClickStylerPlugin extends Plugin
 			|| !(MenuOverlay.containsSubMenu(entries) || client.isMenuScrollable()))
 		{
 			return false;
-		}
-		if (event.isConsumed())
-		{
-			menuOverlay.recordAlreadyConsumedSubmenu();
-			return true;
 		}
 		preparingSubmenu = true;
 		try

@@ -304,10 +304,6 @@ public class NativeSubmenuCycleTest
 		assertThemedNativeState("first", harness.frame(), model);
 		harness.plugin.onMenuOpened(null); // RuneLite reuses the same root object
 		assertThemedNativeState("after the menu reopened", harness.frame(), model);
-		BeforeMenuRender consumed = new BeforeMenuRender();
-		consumed.consume();
-		assertTrue(harness.plugin.handleSubmenuFrame(consumed));
-		assertThemedNativeState("after another subscriber consumed a frame", harness.frame(), model);
 		model.scroll = 1;
 		assertThemedNativeState("after scrolling", harness.frame(), model);
 		model.rootEntryOptions[40] = "Changed";
