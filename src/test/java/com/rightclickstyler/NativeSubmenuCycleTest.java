@@ -2201,40 +2201,27 @@ public class NativeSubmenuCycleTest
 			assertThemedNativeState(context + " callback changed", harness.frame(), model);
 			harness.afterPrepare = () -> { };
 			harness.reopen();
-			assertEquals(context + ": a clean opening ends the run of failures",
-				0, field(harness.overlay, "failedOpenings"));
 		}
 		assertEquals(10L, field(harness.overlay, "submenuChangedDrops"));
 		assertEquals(10L, field(harness.overlay, "submenuEquivalentBlits"));
-		assertFalse((boolean) field(harness.overlay, "submenuDisabled"));
 	}
 
 	@Test
-	public void failuresOnConsecutiveOpeningsEndSubmenuStylingUntilRestart() throws Exception
+	public void everyOpeningAfterAFailedOneGetsAFreshAttempt() throws Exception
 	{
 		NativeModel model = openRowFifteen();
 		Harness harness = harness(model);
-		for (int opening = 1; opening <= MenuOverlay.FAILED_OPENINGS_LIMIT; opening++)
+		// No cooldown, count or lockout: however many openings in a row fail, the next is tried.
+		for (int opening = 0; opening < 10; opening++)
 		{
-			// Themed frames before the failure do not make the opening a clean one.
-			assertThemedNativeState("opening " + opening, harness.frame(), model);
-			failFinalDraw("opening " + opening, harness, model);
+			String context = "opening " + opening;
+			assertThemedNativeState(context, harness.frame(), model);
+			failFinalDraw(context, harness, model);
+			assertNativeWithoutRetry(context + " after its failure", harness.frame());
 			harness.reopen();
 		}
-		assertTrue((boolean) field(harness.overlay, "submenuDisabled"));
-		for (int opening = 0; opening < 3; opening++)
-		{
-			assertNativeWithoutRetry("disabled opening " + opening, harness.frame());
-			harness.reopen();
-		}
-		assertEquals("one blank frame per failed opening, then none",
-			(long) MenuOverlay.FAILED_OPENINGS_LIMIT, field(harness.overlay, "submenuChangedDrops"));
-		// The plugin restarts (startUp) with the menu closed.
-		model.menuOpen = false;
-		harness.overlay.resetFailure();
-		harness.plugin.onMenuOpened(null);
-		model.menuOpen = true;
-		assertThemedNativeState("after restart", harness.frame(), model);
+		assertThemedNativeState("after ten failed openings", harness.frame(), model);
+		assertEquals("one blank frame per failed opening", 10L, field(harness.overlay, "submenuChangedDrops"));
 	}
 
 	@Test
@@ -2248,8 +2235,6 @@ public class NativeSubmenuCycleTest
 		harness.reopen();
 		harness.reopen();
 		assertThemedNativeState("after rapid reopening", harness.frame(), model);
-		assertEquals("an opening with no frames is neither clean nor failed",
-			1, field(harness.overlay, "failedOpenings"));
 		// A prepared frame never survives an opening, even one in the same client frame.
 		harness.afterPrepare = () -> harness.plugin.onMenuOpened(null);
 		Frame reopened = harness.frame();

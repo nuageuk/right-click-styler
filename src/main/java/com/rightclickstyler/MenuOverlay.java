@@ -153,17 +153,6 @@ class MenuOverlay extends Overlay
 	 * being probed, for the rest of the opening; {@link #menuOpened} ends it.
 	 */
 	private boolean submenuBlitFailed;
-	/** A consumed frame was themed in this menu opening. */
-	private boolean openingBlitted;
-	/** Consecutive menu openings that ended with a failed final draw. */
-	private int failedOpenings;
-	/**
-	 * A failure that recurs on every opening (a draw that always fails, or another plugin that
-	 * changes the menu mid-frame each time) would otherwise blank one frame per opening: after
-	 * this many consecutive failed openings, submenus stay native until the plugin restarts.
-	 */
-	static final int FAILED_OPENINGS_LIMIT = 3;
-	private boolean submenuDisabled;
 	private int submenuTraceLogs;
 	private final boolean[] tracedOutcomes = new boolean[SubmenuOutcome.values().length];
 
@@ -204,9 +193,6 @@ class MenuOverlay extends Overlay
 			// No MenuOpened was seen for an open menu, so it may be the failed opening: keep it
 			// native until the next opening. Reads one client flag; no rendering state.
 			submenuBlitFailed = submenuBlitFailed && client.isMenuOpen();
-			openingBlitted = false;
-			failedOpenings = 0;
-			submenuDisabled = false;
 		}
 	}
 
@@ -224,17 +210,8 @@ class MenuOverlay extends Overlay
 		{
 			// Nothing drawn for the failed opening is reused: the next image is rendered afresh.
 			imageCache.invalidate();
-			if (++failedOpenings >= FAILED_OPENINGS_LIMIT)
-			{
-				submenuDisabled = true;
-			}
+			submenuBlitFailed = false;
 		}
-		else if (openingBlitted)
-		{
-			failedOpenings = 0;
-		}
-		submenuBlitFailed = false;
-		openingBlitted = false;
 	}
 
 	synchronized void discardPreparedAtEventStart()
@@ -300,7 +277,7 @@ class MenuOverlay extends Overlay
 		}
 		boolean scrollable = client.isMenuScrollable();
 		int scroll = scrollable ? client.getMenuScroll() : 0;
-		if (submenuBlitFailed || submenuDisabled)
+		if (submenuBlitFailed)
 		{
 			recordOutcome(SubmenuOutcome.FALLBACK_RENDER_EXCEPTION);
 			return false;
@@ -1201,7 +1178,6 @@ class MenuOverlay extends Overlay
 				else if (graphics.drawImage(submenuImage, preparedX, preparedY, null))
 				{
 					submenuBlits++;
-					openingBlitted = true;
 					if (equivalent)
 					{
 						submenuEquivalentBlits++;
