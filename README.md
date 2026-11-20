@@ -2,7 +2,9 @@
 
 Make RuneLite's right-click menus your own with themes, colours, fonts and hover effects. Right Click Styler also styles nested menus while keeping the game's menu layout and interactions.
 
-![A green styled menu for Drakan's medallion, with custom item colours and a visible child menu](docs/images/styled-menu.png)
+| Native RuneLite menu | With Right Click Styler |
+| :---: | :---: |
+| ![The normal RuneLite right-click menu](docs/images/default.png) | ![Right Click Styler's Glass theme in game](docs/images/glass-example.png) |
 
 ## Make it yours
 
