@@ -14,17 +14,12 @@ repositories {
 }
 
 def runeLiteVersion = 'latest.release'
-def pluginMainClass = 'com.rightclickstyler.RightClickStylerPluginTest'
 
 dependencies {
 	compileOnly group: 'net.runelite', name:'client', version: runeLiteVersion
 
 	compileOnly 'org.projectlombok:lombok:1.18.30'
 	annotationProcessor 'org.projectlombok:lombok:1.18.30'
-
-	testImplementation 'junit:junit:4.12'
-	testImplementation group: 'net.runelite', name:'client', version: runeLiteVersion
-	testImplementation group: 'net.runelite', name:'jshell', version: runeLiteVersion
 }
 
 group = 'com.rightclickstyler'
@@ -33,48 +28,4 @@ version = '1.0-SNAPSHOT'
 tasks.withType(JavaCompile).configureEach {
 	options.encoding = 'UTF-8'
 	options.release.set(11)
-}
-
-// -PwriteProbeGolden=<path> regenerates the probe semantics golden file instead of checking it.
-tasks.withType(Test).configureEach {
-	systemProperty 'rightclickstyler.writeProbeGolden', project.findProperty('writeProbeGolden') ?: ''
-	systemProperty 'rightclickstyler.submenuTrace', project.hasProperty('submenuTrace') ? 'true' : 'false'
-	outputs.upToDateWhen { !project.hasProperty('writeProbeGolden') }
-}
-
-tasks.register('run', JavaExec) {
-	classpath = sourceSets.test.runtimeClasspath
-	mainClass = pluginMainClass
-
-	jvmArgs "-ea"
-	if (project.hasProperty('submenuTrace')) {
-		jvmArgs '-Drightclickstyler.submenuTrace=true'
-	}
-	args "--developer-mode", "--debug"
-}
-
-tasks.register('shadowJar', Jar) {
-	dependsOn configurations.testRuntimeClasspath
-	manifest {
-		attributes('Main-Class': pluginMainClass, 'Multi-Release': true)
-	}
-
-	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-	from sourceSets.main.output
-	from sourceSets.test.output
-	from {
-		configurations.testRuntimeClasspath.collect { file ->
-			file.isDirectory() ? file : zipTree(file)
-		}
-	}
-
-	exclude 'META-INF/INDEX.LIST'
-	exclude 'META-INF/*.SF'
-	exclude 'META-INF/*.DSA'
-	exclude 'META-INF/*.RSA'
-	exclude '**/module-info.class'
-
-	group = BasePlugin.BUILD_GROUP
-	archiveClassifier.set('shadow')
-	archiveFileName.set("${rootProject.name}-${project.version}-all.jar")
 }
