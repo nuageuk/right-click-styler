@@ -14,12 +14,14 @@ import java.util.List;
 import java.util.function.IntPredicate;
 import net.runelite.api.BufferProvider;
 import net.runelite.api.Client;
+import net.runelite.api.GameState;
 import net.runelite.api.Menu;
 import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.Point;
 import net.runelite.api.Rasterizer;
 import net.runelite.api.events.BeforeMenuRender;
+import net.runelite.client.ui.overlay.OverlayManager;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
@@ -1003,19 +1005,7 @@ public class NativeSubmenuCycleTest
 	{
 		for (boolean sameRows : new boolean[]{false, true})
 		{
-			NativeModel model = longLoggedRoot(0);
-			// Rows 36 and 37 are the last visible rows; their 5-row children clamp to y=495.
-			for (int row : new int[]{36, 37})
-			{
-				int entry = model.rows - 1 - row;
-				NativeMenu child = new NativeMenu(220);
-				child.entries = actions(sameRows || row == 36 ? new String[]{"Wear", "Fill", "Empty", "Check", "Drop"}
-					: new String[]{"Wear", "Fill", "Empty", "Check", "Use"}, e -> { });
-				model.children.set(model.children.indexOf(model.childByEntry[entry]), child);
-				model.childByEntry[entry] = child;
-				model.root.entries[entry] = actionEntry(row == 36 ? "Swap left-click" : "Swap shift-click",
-					SWAP_TARGET, MenuAction.RUNELITE, child, e -> { });
-			}
+			NativeModel model = clampedSwapPair(sameRows);
 			Harness harness = harness(model);
 			hoverRow(model, 36);
 			assertThemedNativeState("first open", harness.frame(), model);
@@ -1038,6 +1028,29 @@ public class NativeSubmenuCycleTest
 					resolvedTwin(harness, model.childAtRow(36)).output, frame.output));
 			}
 		}
+	}
+
+	/**
+	 * Rows 36 and 37 are the last visible rows of the long root; their 5-row children clamp to
+	 * y=495 and so share one rectangle once both have opened. With {@code sameRows} the two
+	 * children render identically (an equivalent pair); otherwise their last rows differ and
+	 * only native pixels can tell them apart (an identified pair).
+	 */
+	private static NativeModel clampedSwapPair(boolean sameRows)
+	{
+		NativeModel model = longLoggedRoot(0);
+		for (int row : new int[]{36, 37})
+		{
+			int entry = model.rows - 1 - row;
+			NativeMenu child = new NativeMenu(220);
+			child.entries = actions(sameRows || row == 36 ? new String[]{"Wear", "Fill", "Empty", "Check", "Drop"}
+				: new String[]{"Wear", "Fill", "Empty", "Check", "Use"}, e -> { });
+			model.children.set(model.children.indexOf(model.childByEntry[entry]), child);
+			model.childByEntry[entry] = child;
+			model.root.entries[entry] = actionEntry(row == 36 ? "Swap left-click" : "Swap shift-click",
+				SWAP_TARGET, MenuAction.RUNELITE, child, e -> { });
+		}
+		return model;
 	}
 
 	// ---- Native pixel identification at the live screen edge (canvas 592, children 565,465,131x127) ----
@@ -1773,6 +1786,331 @@ public class NativeSubmenuCycleTest
 		assertEquals("normal ownership returns on the next event", Shown.THEMED, harness.frame().shown);
 	}
 
+	// ---- After consumption: changes between BeforeMenuRender and the overlay's final draw ----
+
+	/** Root entry 40 (row 35) opens a child; entries 0 and 1 (the bottom rows) are plain. */
+	private static final int ROOT_ENTRY_WITH_CHILD = 40;
+
+	/** A long root with row 15's child open and the pointer on root row 19. */
+	private static NativeModel openRowFifteen()
+	{
+		NativeModel model = longLoggedRoot(0);
+		model.openLogged(15, 646, 225, 235);
+		model.live = new Point(549, 287);
+		return model;
+	}
+
+	/** Same option, target, type and child as before; only the click callback is new. */
+	private static void replaceRootCallback(NativeModel model, int entry)
+	{
+		MenuEntry old = model.root.entries[entry];
+		model.root.entries[entry] = actionEntry(old.getOption(), old.getTarget(), old.getType(),
+			old.getSubMenu(), newCallback());
+	}
+
+	private static void replaceCallback(NativeMenu menu, int entry)
+	{
+		MenuEntry old = menu.entries[entry];
+		menu.entries[entry] = actionEntry(old.getOption(), old.getTarget(), old.getType(),
+			old.getSubMenu(), newCallback());
+	}
+
+	/** A distinct instance on every call (a non-capturing lambda would be reused). */
+	private static java.util.function.Consumer<MenuEntry> newCallback()
+	{
+		return new java.util.function.Consumer<MenuEntry>()
+		{
+			@Override
+			public void accept(MenuEntry entry)
+			{
+			}
+		};
+	}
+
+	private static void assertDroppedAndNativeAfter(String context, Harness harness, Frame frame) throws Exception
+	{
+		assertEquals(context + ": a consumed frame cannot fall back to native", Shown.BLANK, frame.shown);
+		assertEquals(context, 1L, field(harness.overlay, "submenuChangedDrops"));
+		assertEquals(context, 0L, field(harness.overlay, "submenuEquivalentBlits"));
+		assertEquals(context + ": the final draw never reads the mouse", 0, frame.renderReads);
+		assertEquals(context + ": the final draw never draws natively", 1, frame.nativeDraws);
+		harness.afterPrepare = () -> { };
+		assertEquals(context + ": native fallback persists after a consumed-frame failure",
+			Shown.NATIVE, harness.frame().shown);
+	}
+
+	@Test
+	public void changesThatCannotChangeTheImageKeepTheConsumedFrame() throws Exception
+	{
+		String[] changes = {"root callback", "open child callback", "entries of a closed child"};
+		for (int change = 0; change < changes.length; change++)
+		{
+			String context = changes[change];
+			NativeModel model = openRowFifteen();
+			Frame unchanged = harness(model).frame();
+			Harness harness = harness(model);
+			int which = change;
+			harness.afterPrepare = () ->
+			{
+				if (which == 0)
+				{
+					replaceRootCallback(model, ROOT_ENTRY_WITH_CHILD);
+				}
+				else if (which == 1)
+				{
+					replaceCallback(model.open, 2);
+				}
+				else
+				{
+					model.childAtRow(20).entries[1] = entry(new String[]{"Renamed"}, 0, null);
+				}
+			};
+			Frame frame = harness.frame();
+			assertThemedNativeState(context, frame, model);
+			assertTrue(context + ": the image is the unchanged frame's image",
+				sameImage(unchanged.output, frame.output));
+			assertEquals(context, 0L, field(harness.overlay, "submenuChangedDrops"));
+			assertFalse(context, (boolean) field(harness.overlay, "submenuBlitFailed"));
+			// Only the callbacks are part of the strict check; a closed child's rows never were.
+			assertEquals(context, which < 2 ? 1L : 0L, field(harness.overlay, "submenuEquivalentBlits"));
+
+			// Theming continues, including through the next native submenu transition.
+			harness.afterPrepare = () -> { };
+			hoverRow(model, 18);
+			assertThemedNativeState(context + ": next open child", harness.frame(), model);
+			assertTrue(context, model.open == model.childAtRow(18));
+		}
+	}
+
+	@Test
+	public void changesThatCouldChangeTheImageStillDropTheConsumedFrame() throws Exception
+	{
+		String[] changes = {
+			"root option text",
+			"open child option text",
+			"callback and text together",
+			"open child replaced by an identical-looking menu",
+			"another child opens",
+			"open child closes",
+			"open child moves",
+			"open child gains a row",
+		};
+		for (int change = 0; change < changes.length; change++)
+		{
+			String context = changes[change];
+			NativeModel model = openRowFifteen();
+			Harness harness = harness(model);
+			int which = change;
+			harness.afterPrepare = () ->
+			{
+				NativeMenu open = model.open;
+				switch (which)
+				{
+					case 0:
+						model.rootEntryOptions[ROOT_ENTRY_WITH_CHILD] = "Changed";
+						break;
+					case 1:
+						open.entries[2] = entry(new String[]{"Changed"}, 0, null);
+						break;
+					case 2:
+						replaceRootCallback(model, ROOT_ENTRY_WITH_CHILD);
+						model.rootEntryOptions[ROOT_ENTRY_WITH_CHILD + 1] = "Changed";
+						break;
+					case 3:
+						// Equal pixels, but a different native menu object: never assumed open.
+						NativeMenu twin = new NativeMenu(open.openWidth);
+						twin.entries = open.entries.clone();
+						twin.setBounds(open.x, open.y, open.width, open.height);
+						int opener = model.rows - 1 - 15;
+						model.root.entries[opener] = entry(model.rootEntryOptions, opener, twin);
+						break;
+					case 4:
+						model.openLogged(18, 646, 270, 235);
+						break;
+					case 5:
+						open.setBounds(0, 0, 0, 0);
+						model.open = null;
+						break;
+					case 6:
+						open.setBounds(open.x, open.y + MenuRenderer.ROW_HEIGHT, open.width, open.height);
+						break;
+					default:
+						MenuEntry[] grown = Arrays.copyOf(open.entries, open.entries.length + 1);
+						grown[grown.length - 1] = entry(new String[]{"Extra"}, 0, null);
+						open.entries = grown;
+						break;
+				}
+			};
+			assertDroppedAndNativeAfter(context, harness, harness.frame());
+		}
+	}
+
+	@Test
+	public void equivalentChildrenKeepTheImageOnlyWhileEveryAlternativeIsUnchanged() throws Exception
+	{
+		// {change to the child that is not open, the outcome}: either child may be native's.
+		for (boolean visible : new boolean[]{false, true})
+		{
+			String context = visible ? "closed twin's text" : "closed twin's callback";
+			NativeModel model = clampedSwapPair(true);
+			Harness harness = harness(model);
+			hoverRow(model, 36);
+			assertThemedNativeState(context + ": first open", harness.frame(), model);
+			hoverRow(model, 37);
+			NativeMenu closedTwin = model.childAtRow(36);
+			harness.afterPrepare = () ->
+			{
+				if (visible)
+				{
+					closedTwin.entries[0] = actionEntry("Changed", "", MenuAction.RUNELITE, null, newCallback());
+				}
+				else
+				{
+					replaceCallback(closedTwin, 0);
+				}
+			};
+			Frame frame = harness.frame();
+			assertEquals(context, 1L, outcome(harness, MenuOverlay.SubmenuOutcome.READY_WITH_EQUIVALENT_CHILD));
+			if (visible)
+			{
+				assertDroppedAndNativeAfter(context, harness, frame);
+			}
+			else
+			{
+				assertThemedNativeState(context, frame, model);
+				assertEquals(context, 1L, field(harness.overlay, "submenuEquivalentBlits"));
+			}
+		}
+	}
+
+	@Test
+	public void nativelyIdentifiedChildIsNeverRecheckedAfterConsumption() throws Exception
+	{
+		NativeModel model = clampedSwapPair(false);
+		Harness harness = harness(model);
+		hoverRow(model, 36);
+		assertThemedNativeState("first open", harness.frame(), model);
+		hoverRow(model, 37);
+		// Not even a callback: the pixels that told the pair apart are gone after consumption.
+		harness.afterPrepare = () -> replaceCallback(model.childAtRow(37), 0);
+		Frame frame = harness.frame();
+		assertEquals(1L, outcome(harness, MenuOverlay.SubmenuOutcome.READY_WITH_NATIVE_IDENTIFIED_CHILD));
+		assertDroppedAndNativeAfter("identified pair", harness, frame);
+	}
+
+	@Test
+	public void liveHierarchyOutsideTheLimitsAfterConsumptionIsDropped() throws Exception
+	{
+		NativeModel model = openRowFifteen();
+		Harness harness = harness(model);
+		// The open child's first row now opens the root again: an identity cycle.
+		harness.afterPrepare = () -> model.open.entries[0] =
+			entry(new String[]{model.open.entries[0].getOption()}, 0, model.root);
+		assertDroppedAndNativeAfter("submenu cycle", harness, harness.frame());
+	}
+
+	@Test
+	public void exceptionWhileRecheckingIsAFailedDrawNotAThemedFrame() throws Exception
+	{
+		NativeModel model = openRowFifteen();
+		boolean[] failing = {false};
+		model.root.entries[1] = failingEntry(model.rootEntryOptions[1], failing);
+		Harness harness = harness(model);
+		assertThemedNativeState("before", harness.frame(), model);
+		// Entry 0's callback ends the strict check; reading entry 1 again then throws.
+		harness.afterPrepare = () ->
+		{
+			replaceRootCallback(model, 0);
+			failing[0] = true;
+		};
+		Frame frame = harness.frame();
+		assertEquals("a consumed frame cannot fall back to native", Shown.BLANK, frame.shown);
+		assertTrue((boolean) field(harness.overlay, "submenuBlitFailed"));
+		assertFalse((boolean) field(harness.overlay, "prepared"));
+		assertEquals(0L, field(harness.overlay, "submenuEquivalentBlits"));
+		failing[0] = false;
+		harness.afterPrepare = () -> { };
+		assertEquals("native fallback persists after a failed final draw", Shown.NATIVE, harness.frame().shown);
+	}
+
+	/** A plain entry whose option read throws while {@code failing[0]} is set. */
+	private static MenuEntry failingEntry(String option, boolean[] failing)
+	{
+		return (MenuEntry) Proxy.newProxyInstance(MenuEntry.class.getClassLoader(),
+			new Class<?>[]{MenuEntry.class}, (proxy, method, args) ->
+			{
+				switch (method.getName())
+				{
+					case "getOption":
+						if (failing[0])
+						{
+							throw new IllegalStateException("entry read failed");
+						}
+						return option;
+					case "getTarget": return "";
+					case "getType": return MenuAction.RUNELITE;
+					case "getItemId": return -1;
+					case "hashCode": return System.identityHashCode(proxy);
+					case "equals": return proxy == args[0];
+					default:
+						Class<?> type = method.getReturnType();
+						if (type == boolean.class) return false;
+						if (type == int.class) return 0;
+						return null;
+				}
+			});
+	}
+
+	@Test
+	public void eventsWhileOverlaysCannotDrawAreNeverConsumed() throws Exception
+	{
+		// RuneLite's OverlayRenderer draws no overlay unless the client is logged in.
+		for (boolean submenus : new boolean[]{true, false})
+		{
+			NativeModel model = submenus ? openRowFifteen()
+				: new NativeModel(434, 130, 212, 4, false, 0, entry -> false);
+			model.live = new Point(500, 180);
+			Harness harness = harness(model);
+			for (GameState state : new GameState[]{GameState.LOADING, GameState.CONNECTION_LOST,
+				GameState.HOPPING, GameState.LOGIN_SCREEN})
+			{
+				model.gameState = state;
+				String context = (submenus ? "submenus " : "plain ") + state;
+				Frame frame = harness.eventFrame();
+				assertEquals(context, Shown.NATIVE, frame.shown);
+				assertEquals(context + ": not probed", 0, frame.nativeDraws);
+				assertFalse(context, (boolean) field(harness.overlay, "prepared"));
+			}
+			model.gameState = GameState.LOGGED_IN;
+			Frame loggedIn = harness.eventFrame();
+			assertNotEquals("logged in, the menu is ours again", Shown.NATIVE, loggedIn.shown);
+			if (submenus)
+			{
+				assertThemedNativeState("logged in", loggedIn, model);
+			}
+		}
+	}
+
+	@Test
+	public void stoppedPluginNeverConsumesOrDrawsAStaleFrame() throws Exception
+	{
+		NativeModel model = openRowFifteen();
+		Harness harness = harness(model);
+		assertThemedNativeState("running", harness.eventFrame(), model);
+		// shutDown on the EDT between this frame's consumption and its overlay draw.
+		harness.afterPrepare = harness::stopPlugin;
+		Frame stopped = harness.eventFrame();
+		assertEquals("the frame was consumed before shutDown", 1, stopped.nativeDraws);
+		assertEquals("no image is drawn after shutDown", 1L, field(harness.overlay, "submenuBlits"));
+		assertFalse((boolean) field(harness.overlay, "prepared"));
+		// A post that was already under way when the EventBus unregistered the plugin.
+		harness.afterPrepare = () -> { };
+		Frame late = harness.eventFrame();
+		assertEquals("not consumed once stopped", Shown.NATIVE, late.shown);
+		assertEquals("not probed once stopped", 0, late.nativeDraws);
+		assertFalse((boolean) field(harness.overlay, "prepared"));
+	}
+
 	@Test
 	public void nativeChildSwitchIsThemedOnTheCycleItHappens() throws Exception
 	{
@@ -2015,16 +2353,55 @@ public class NativeSubmenuCycleTest
 			failOnVerifyMismatch = imageCacheVerify == 1;
 			setField(plugin, "client", model.client);
 			setField(plugin, "menuOverlay", overlay);
+			setField(plugin, "running", true); // as after startUp
 		}
 
+		/** Through the submenu path directly. */
 		private Frame frame() throws Exception
+		{
+			return frame(false);
+		}
+
+		/** Through the plugin's whole {@code BeforeMenuRender} subscriber, as RuneLite delivers it. */
+		private Frame eventFrame() throws Exception
+		{
+			return frame(true);
+		}
+
+		/** The plugin's real shutDown, as PluginManager runs it on the EDT after unregistering it. */
+		private void stopPlugin()
+		{
+			try
+			{
+				// Its only constructor is private (Guice-injected); nothing it stores is used by remove.
+				Constructor<?> constructor = OverlayManager.class.getDeclaredConstructors()[0];
+				constructor.setAccessible(true);
+				setField(plugin, "overlayManager",
+					constructor.newInstance(new Object[constructor.getParameterCount()]));
+				setField(plugin, "localPlayer", new LocalPlayerSnapshot());
+			}
+			catch (Exception e)
+			{
+				throw new AssertionError(e);
+			}
+			plugin.shutDown();
+		}
+
+		private Frame frame(boolean viaEvent) throws Exception
 		{
 			int[] before = model.pixels.clone();
 			long blits = (long) field(overlay, "submenuBlits");
 			int draws = model.nativeDraws;
 			int reads = model.liveReads;
 			BeforeMenuRender event = new BeforeMenuRender();
-			assertTrue("the submenu path owns submenu events", plugin.handleSubmenuFrame(event));
+			if (viaEvent)
+			{
+				plugin.onBeforeMenuRender(event);
+			}
+			else
+			{
+				assertTrue("the submenu path owns submenu events", plugin.handleSubmenuFrame(event));
+			}
 			int preparedReads = model.liveReads;
 			assertArrayEquals("the native probe restores the framebuffer", before, model.pixels);
 			afterPrepare.run();
@@ -2103,6 +2480,7 @@ public class NativeSubmenuCycleTest
 		private int gameCycle = 1000;
 		private final int[] pixels = new int[CANVAS_WIDTH * CANVAS_HEIGHT];
 		private final Client client;
+		private GameState gameState = GameState.LOGGED_IN;
 		private Point live;
 		private NativeMenu open;
 		private boolean hasPending;
@@ -2172,6 +2550,7 @@ public class NativeSubmenuCycleTest
 					switch (method.getName())
 					{
 						case "isMenuOpen": return true;
+						case "getGameState": return gameState;
 						case "getMenu": return root;
 						case "isMenuScrollable": return scrollable;
 						case "getMenuScroll": return NativeModel.this.scroll; // the field, not the constructor parameter

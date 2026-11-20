@@ -130,6 +130,14 @@ public class RightClickStylerPlugin extends Plugin
 			menuOverlay.discardPreparedAtEventStart();
 			return;
 		}
+		// Consume only a frame our overlay will draw. RuneLite's OverlayRenderer draws no overlay
+		// unless the client is logged in, and once shutDown begins the overlay is being removed
+		// (the EventBus is unregistered first, but a post already under way can still arrive).
+		if (!running || client.getGameState() != GameState.LOGGED_IN)
+		{
+			menuOverlay.discardPreparedAtEventStart();
+			return;
+		}
 		if (handleSubmenuFrame(event))
 		{
 			return;
@@ -168,9 +176,12 @@ public class RightClickStylerPlugin extends Plugin
 		{
 			if (menuOverlay.prepareSubmenuFrame(root, entries, frameMouse))
 			{
-				// A late structural change or overlay draw failure can leave this
-				// consumed frame blank. Only a later menu event can choose
-				// native fallback; this frame cannot be restored.
+				// Final: native drawing is skipped once this returns. A structural change
+				// before the overlay draws keeps the image only if it cannot change it; any
+				// other change, or a failed draw, leaves this one frame without a menu and
+				// returns later frames to native drawing. drawOriginalMenu is called only
+				// here, where native drawing itself happens: the overlay pass cannot read the
+				// rasterizer clip such a late native draw would depend on.
 				event.consume();
 			}
 		}

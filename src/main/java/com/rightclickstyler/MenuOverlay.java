@@ -128,10 +128,24 @@ class MenuOverlay extends Overlay
 	private PreparedMenuState preparedState;
 	private boolean preparedScrollable;
 	private int preparedScroll;
+	private int preparedFirstRow;
+	/**
+	 * What the prepared image was drawn from, kept so that a structural change after the event
+	 * is consumed can be proven not to change the image ({@link #imageMatchesLiveMenus}).
+	 */
+	private SubmenuTree preparedTree;
+	/** The renderer inputs of every drawn menu, root first. */
+	private SubmenuImageCache.Menu[] preparedMenus;
+	/** Every chain the image stands for, or null when none can be re-proven at the final draw. */
+	private int[][] preparedChains;
+	private ScrollableMenuViewport preparedViewport;
+	private Point preparedMouse;
 	private boolean prepared;
 	private boolean externallyConsumed;
 	private long lastFailureLog;
 	private long submenuBlits;
+	/** Final draws whose live structure changed after consumption without changing the image. */
+	private long submenuEquivalentBlits;
 	private long submenuClosedDrops;
 	private long submenuChangedDrops;
 	private boolean submenuBlitFailed;
@@ -363,7 +377,8 @@ class MenuOverlay extends Overlay
 			Theme theme = themeManager.effectiveTheme();
 			Player player = client.getLocalPlayer();
 			int localLevel = player == null ? 0 : player.getCombatLevel();
-			renderOrReuseSubmenuImage(tree, chain, viewport, region, frameMouse, scroll, theme, localLevel);
+			SubmenuImageCache.Menu[] drawn = renderOrReuseSubmenuImage(tree, chain, viewport, region,
+				frameMouse, scroll, theme, localLevel);
 			// Structural state only: the frame's mouse sample is fixed, so pointer
 			// movement since the sample is not a reason to discard native proof.
 			boolean changed = !client.isMenuOpen()
@@ -381,6 +396,14 @@ class MenuOverlay extends Overlay
 			preparedState = state;
 			preparedScrollable = scrollable;
 			preparedScroll = scroll;
+			preparedFirstRow = scrollable ? viewport.firstRow : 0;
+			preparedTree = tree;
+			preparedMenus = drawn;
+			// An identified child was told apart from its alternatives by native pixels that no
+			// longer exist after consumption, so only a proven or equivalent chain is re-checked.
+			preparedChains = equivalent != null ? equivalent : identified != null ? null : new int[][]{chain};
+			preparedViewport = viewport;
+			preparedMouse = frameMouse;
 			prepared = true;
 			SubmenuOutcome ready = equivalent != null ? SubmenuOutcome.READY_WITH_EQUIVALENT_CHILD
 				: identified != null ? SubmenuOutcome.READY_WITH_NATIVE_IDENTIFIED_CHILD
@@ -553,11 +576,8 @@ class MenuOverlay extends Overlay
 			}
 			return null; // the previous resolver proved a chain the pixels do not fit
 		}
-		SubmenuTree.Node root = tree.nodes.get(0);
 		List<MenuRenderer.Row> rootRows = new ArrayList<>();
-		MenuRenderer.TargetKind rootKind = fillMenuRows(root, null, rootRows, new ArrayList<>());
-		SubmenuImageCache.Menu rootMenu = SubmenuImageCache.menu(root.bounds, root.header, rootKind,
-			scroll, viewport.hoverIndex(mouse), rootRows);
+		SubmenuImageCache.Menu rootMenu = rootMenu(tree, viewport, mouse, scroll, rootRows);
 		SubmenuImageCache.Menu[] first = drawnMenus(tree, alternatives[0], rootMenu, rootRows, mouse);
 		for (int i = 1; i < alternatives.length; i++)
 		{
@@ -574,6 +594,82 @@ class MenuOverlay extends Overlay
 			}
 		}
 		return alternatives;
+	}
+
+	/** The root's renderer inputs, filled as {@link #renderOrReuseSubmenuImage} fills them; fills {@code rootRows}. */
+	private static SubmenuImageCache.Menu rootMenu(SubmenuTree tree, ScrollableMenuViewport viewport,
+		Point mouse, int scroll, List<MenuRenderer.Row> rootRows)
+	{
+		SubmenuTree.Node root = tree.nodes.get(0);
+		MenuRenderer.TargetKind rootKind = fillMenuRows(root, null, rootRows, new ArrayList<>());
+		return SubmenuImageCache.menu(root.bounds, root.header, rootKind,
+			scroll, viewport.hoverIndex(mouse), rootRows);
+	}
+
+	/**
+	 * Whether the prepared image is still exactly the image preparation would draw for the live
+	 * menus. Called only after the event was consumed and the strict final check failed, so the
+	 * alternative is a frame with no menu at all.
+	 *
+	 * <p>True only when the live hierarchy has the prepared nodes (the same menu objects, opened
+	 * from the same entries, with the same geometry) and, for every chain the image stands for,
+	 * the renderer would now receive inputs equal to those it drew from. Native submenu state
+	 * changes only in the client's per-cycle input step, and its geometry and links are
+	 * unchanged, so the chain the probe proved is still the one open. What changed (for example
+	 * a click callback, or the entries of a menu that is not drawn) is not a rendering input, so
+	 * the image is pixel-identical to a fresh render of the live state and every native hitbox is
+	 * where the image shows it. Any visible difference returns false; nothing is re-rendered.
+	 */
+	private boolean imageMatchesLiveMenus(Menu currentRoot)
+	{
+		if (preparedTree == null || preparedMenus == null || preparedChains == null)
+		{
+			return false;
+		}
+		SubmenuTree live;
+		try
+		{
+			live = SubmenuTree.capture(currentRoot, currentRoot.getMenuEntries(), preparedFirstRow);
+		}
+		catch (IllegalArgumentException e)
+		{
+			return false; // the live hierarchy is outside the supported limits
+		}
+		if (!sameNodes(preparedTree, live))
+		{
+			return false;
+		}
+		for (int[] chain : preparedChains)
+		{
+			List<MenuRenderer.Row> rootRows = new ArrayList<>();
+			SubmenuImageCache.Menu root = rootMenu(live, preparedViewport, preparedMouse, preparedScroll, rootRows);
+			if (SubmenuImageCache.menusDifference(preparedMenus,
+				drawnMenus(live, chain, root, rootRows, preparedMouse)) != SubmenuImageCache.Miss.HIT)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** The same menu objects in the same order, opened from the same entries, at the same bounds. */
+	private static boolean sameNodes(SubmenuTree prepared, SubmenuTree live)
+	{
+		if (prepared.nodes.size() != live.nodes.size())
+		{
+			return false;
+		}
+		for (int i = 0; i < prepared.nodes.size(); i++)
+		{
+			SubmenuTree.Node a = prepared.nodes.get(i);
+			SubmenuTree.Node b = live.nodes.get(i);
+			if (a.menu != b.menu || a.parentNode != b.parentNode
+				|| a.parentEntryIndex != b.parentEntryIndex || !a.bounds.equals(b.bounds))
+			{
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/** The renderer inputs of one chain, filled exactly as {@link #renderOrReuseSubmenuImage} fills them. */
@@ -649,8 +745,10 @@ class MenuOverlay extends Overlay
 	 * Fills the rows of every drawn menu, then renders them into {@link #submenuImage}, or
 	 * keeps the image already there when the cache is enabled and every rendering input equals
 	 * the inputs it was rendered from.
+	 *
+	 * @return the renderer inputs of every drawn menu, root first, as the image now holds them
 	 */
-	private void renderOrReuseSubmenuImage(SubmenuTree tree, int[] activeChain,
+	private SubmenuImageCache.Menu[] renderOrReuseSubmenuImage(SubmenuTree tree, int[] activeChain,
 		ScrollableMenuViewport viewport, Rectangle region, Point mouse, int scroll,
 		Theme theme, int localLevel)
 	{
@@ -668,11 +766,6 @@ class MenuOverlay extends Overlay
 				? viewport.hoverIndex(mouse)
 				: hoverIndex(node.bounds, buffer.rows.size(), mouse);
 		}
-		if (!imageCacheEnabled)
-		{
-			drawSubmenuImage(submenuImage, tree, activeChain, region, hovered, scroll, theme, localLevel);
-			return;
-		}
 		SubmenuImageCache.Menu[] drawn = new SubmenuImageCache.Menu[menus];
 		for (int depth = 0; depth < menus; depth++)
 		{
@@ -680,6 +773,11 @@ class MenuOverlay extends Overlay
 			RowBuffer buffer = submenuRowBuffer(depth);
 			drawn[depth] = SubmenuImageCache.menu(node.bounds, node.header, buffer.headerKind,
 				depth == 0 ? scroll : 0, hovered[depth], buffer.rows);
+		}
+		if (!imageCacheEnabled)
+		{
+			drawSubmenuImage(submenuImage, tree, activeChain, region, hovered, scroll, theme, localLevel);
+			return drawn;
 		}
 		SubmenuImageCache.Key key = SubmenuImageCache.capture(theme, config, client.getModIcons(),
 			localLevel, region, drawn);
@@ -696,7 +794,7 @@ class MenuOverlay extends Overlay
 				drawSubmenuImage(submenuImage, tree, activeChain, region, hovered, scroll, theme, localLevel);
 				imageCache.rendered(key);
 			}
-			return;
+			return drawn;
 		}
 		// Invalid until the render completes, so a render that throws can never be reused.
 		imageCache.invalidate();
@@ -705,6 +803,7 @@ class MenuOverlay extends Overlay
 		{
 			imageCache.rendered(key);
 		}
+		return drawn;
 	}
 
 	private static SubmenuTree.Node menuNode(SubmenuTree tree, int[] activeChain, int depth)
@@ -943,6 +1042,12 @@ class MenuOverlay extends Overlay
 		preparedState = null;
 		preparedScrollable = false;
 		preparedScroll = 0;
+		preparedFirstRow = 0;
+		preparedTree = null;
+		preparedMenus = null;
+		preparedChains = null;
+		preparedViewport = null;
+		preparedMouse = null;
 	}
 
 	private RowBuffer submenuRowBuffer(int depth)
@@ -1030,25 +1135,36 @@ class MenuOverlay extends Overlay
 			{
 				boolean open = client.isMenuOpen();
 				Menu currentRoot = open ? client.getMenu() : null;
+				// The event is already consumed, so a drop here leaves this frame without a
+				// menu. Only structural changes may cause it; the pointer is never read here.
+				boolean rootChanged = open && (!preparedFrameMatches(true, currentRoot, preparedRoot)
+					|| client.isMenuScrollable() != preparedScrollable
+					|| (preparedScrollable && client.getMenuScroll() != preparedScroll)
+					|| preparedState == null);
+				String change = !open ? null : rootChanged ? "root or scroll"
+					: preparedState.mismatchReason(currentRoot);
+				// A change that leaves every rendering input, link and rectangle as prepared does
+				// not change the image, so that image is still the live menu's.
+				boolean equivalent = change != null && !rootChanged && imageMatchesLiveMenus(currentRoot);
 				if (!open)
 				{
 					submenuClosedDrops++;
 					traceFinalDrop("menu closed after event consumed");
 				}
-				// The event is already consumed, so a drop here leaves this frame without a
-				// menu. Only structural changes may cause it; the pointer is never read here.
-				else if (!preparedFrameMatches(true, currentRoot, preparedRoot)
-					|| client.isMenuScrollable() != preparedScrollable
-					|| (preparedScrollable && client.getMenuScroll() != preparedScroll)
-					|| preparedState == null || preparedState.mismatchReason(currentRoot) != null)
+				else if (change != null && !equivalent)
 				{
 					submenuChangedDrops++;
 					submenuBlitFailed = true;
-					traceFinalDrop("root, scroll or entries changed after event consumed");
+					traceFinalDrop(change + " changed after event consumed");
 				}
 				else if (graphics.drawImage(submenuImage, preparedX, preparedY, null))
 				{
 					submenuBlits++;
+					if (equivalent)
+					{
+						submenuEquivalentBlits++;
+						traceOutcome("FINAL_EQUIVALENT", change + " changed after event consumed; image unchanged");
+					}
 				}
 				else
 				{
