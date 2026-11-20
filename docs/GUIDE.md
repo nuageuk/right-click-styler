@@ -2,15 +2,7 @@
 
 Most appearance settings are in the Right Click Styler panel in the RuneLite sidebar. Sidebar visibility is controlled from Right Click Styler's normal RuneLite configuration page.
 
-Classic is selected by default, and every built-in theme uses the RuneScape Bold font by default.
-
-![The settings panel](images/overall-menu.png)
-
-<!-- SCREENSHOT TODO S02
-File: docs/images/overall-menu.png (replace the existing capture)
-Capture: Show the current sidebar with the Style and Targets sections and their new controls.
-Status: Awaiting manual recapture; see SCREENSHOT_CHECKLIST.md.
--->
+Classic is selected by default, and every built-in theme uses the RuneScape Bold font by default. The screenshots below show one configured theme; their colour values are examples, not factory defaults.
 
 ## Getting started
 
@@ -27,11 +19,15 @@ Some settings belong to the selected theme and some apply everywhere:
 
 Unsaved theme edits are temporary. They are lost if you discard them, close RuneLite, or switch RuneLite configuration profiles.
 
-## Preview
+## Preview and theme management
+
+![The live preview and theme selector with Save, Save as, Revert and More controls](images/settings/01-preview.png)
+
+### Preview
 
 The preview at the top shows a sample menu drawn with the current theme and settings. Move the mouse over it to see the hover style. When you are logged in, it uses your combat level for the sample combat-level colours.
 
-## Themes
+### Themes
 
 The five built-in themes are protected presets, marked with a lock icon. You can edit their appearance temporarily, but you cannot overwrite, rename or delete them. Your custom themes appear after the built-in themes in the list.
 
@@ -58,7 +54,7 @@ Theme names are limited to 40 characters. Empty names are not accepted.
 
 ## Colours
 
-![Colours](images/colours.png)
+![The Colours section with background, border, header, text, hover and accent swatches](images/settings/02-colours.png)
 
 Click a colour to open the colour picker. These colours are part of the theme and change the working appearance immediately.
 
@@ -76,7 +72,7 @@ Classic uses a brown background, black border and header, brown header text and 
 
 ## Style
 
-![Style](images/style.png)
+![The Style section showing separate background and hover opacity controls](images/settings/03-style.png)
 
 - **Corner radius**: controls how rounded the menu corners are, from 0 for square corners to 8.
 - **Background opacity**: controls the background and header fill from 0% to 100%.
@@ -93,21 +89,13 @@ Classic uses a brown background, black border and header, brown header text and 
 
 Classic defaults to square corners, 100% background and hover opacity, Text hover, Border on, Drop shadow off and Header on.
 
-<!-- SCREENSHOT TODO S03
-File: docs/images/style.png (replace the existing capture)
-Capture: Show both opacity controls in the Style section.
-Status: Awaiting manual recapture; see SCREENSHOT_CHECKLIST.md.
--->
+With a translucent background, the game world remains visible through the menu while text and outlines stay solid:
 
-<!-- SCREENSHOT TODO S04
-File: docs/images/opacity-example.png
-Capture: Show a menu with a translucent background and a clearly visible hovered row.
-Status: Awaiting manual capture; see SCREENSHOT_CHECKLIST.md.
--->
+![A semi-transparent styled Drakan's medallion menu over the game world](images/transparency.png)
 
 ## Text
 
-![Text](images/text.png)
+![The Text section with font, font size and text shadow settings](images/settings/04-text.png)
 
 - **Font**: Regular, Small and Bold are RuneScape's fonts. Sans and Serif are standard scalable fonts. Sans and Serif display runs of extra spaces as a single space.
 - **Font size**: ranges from 11 to 13. It only applies to Sans and Serif, so the control is disabled for the RuneScape fonts.
@@ -117,7 +105,7 @@ Classic uses Bold with Text shadow enabled. RuneScape fonts have a fixed size.
 
 ## Action highlights
 
-![Action highlights](images/action-highlights.png)
+![The Action highlights section with enabled and bold switches and individual action rules](images/settings/05-action-highlights.png)
 
 Action highlights change the action text only. They do not change target names, combat levels, menu entries or click behaviour.
 
@@ -134,7 +122,7 @@ The default rules highlight Attack in red and Walk here and Examine in grey. Wit
 
 ## Targets
 
-![Targets](images/targets.png)
+![The Targets section with Game and Custom modes and target-type colour controls](images/settings/06-targets.png)
 
 The target is the thing an action is used on, such as "Guard" in "Attack Guard".
 
@@ -145,17 +133,11 @@ The target is the thing an action is used on, such as "Guard" in "Attack Guard".
 
 The default custom colours are yellow for NPCs, white for players, orange for items, cyan for objects and white for Other.
 
-Choose **Reset Target Colours to Defaults** in the Targets section to restore those five colour values. This resets target colours, not your saved themes. In Custom mode, colours explicitly added within a target by the game or another plugin are preserved where they differ from the game's usual category colour; results can vary with the source formatting.
-
-<!-- SCREENSHOT TODO S06
-File: docs/images/custom-target-colours.png
-Capture: Show Custom target mode and a styled menu with visibly different target categories.
-Status: Awaiting manual capture; see SCREENSHOT_CHECKLIST.md.
--->
+Choose **Reset Target Colours to Defaults** in the Targets section to restore those five colour values. It leaves the selected mode, combat-level settings, action rules and saved themes alone. In Custom mode, colours explicitly added within a target by the game or another plugin are preserved where they differ from the game's usual category colour; results can vary with the source formatting.
 
 ## Combat levels
 
-![Combat levels](images/combat-levels.png)
+![The Combat levels section with Game and Custom modes and lower, same and higher level colours](images/settings/07-combat-levels.png)
 
 These settings control the `(level-N)` text after NPC and player names independently of the rest of the target.
 
@@ -169,13 +151,13 @@ Combat-level mode takes precedence over target mode for the level portion. For e
 
 ## Advanced
 
-![Advanced](images/advanced.png)
+![The Advanced section with text positioning, Show hit rows and Reset all settings](images/settings/08-advanced.png)
 
 You will not normally need these controls.
 
 - **Text offset X**: sets the space between the menu edge and the text, from 0 to 20. The default is 3, and the same space is reserved on the right.
 - **Baseline nudge**: moves text up or down from -10 to 10. The default is 0.
-- **Show hit rows**: outlines each native row click area for alignment checking. It is off by default.
+- **Show hit rows**: outlines each native row click area for alignment checking. This is a diagnostic control, off by default; leave it off for ordinary play.
 - **Reset all settings**: after confirmation, restores Action highlights, Targets, Combat levels and Advanced to their defaults, selects Classic and discards unsaved theme edits. Saved custom themes are preserved.
 
 The menu keeps the game's native width and click areas. When text is wider than its available row or header space, the renderer fits it within that space. Narrow menus or large offsets may make the text appear compressed.
@@ -205,20 +187,20 @@ The sidebar's **Advanced > Reset all settings** also restores visual defaults an
 - Right Click Styler preserves the game's menu width, row positions and click regions. It changes appearance only.
 - A failed final submenu draw uses native rendering for the remainder of that menu opening; a new opening retries. A failed ordinary-menu render uses native rendering until the plugin is restarted. In rare cases, a menu change after native drawing has been consumed can leave one frame without a visible menu.
 - Ground-item icons inserted into context menus by other plugins are not currently reproduced by the styled renderer. Menu geometry and selection remain native.
+- Exceptionally large menus may reduce FPS while open. Normal-sized menus showed no measurable FPS difference in live Windows testing.
+- Unicode rendering on macOS has an open issue and has not been verified as fixed for this release.
 
 The submenu path samples the game's own draw to identify visible child regions, then restores the sampled framebuffer before drawing the style. It does not create menu actions or change the game's selection handling.
 
-<!-- SCREENSHOT TODO S05
-File: docs/images/scrollable-menu.png
-Capture: Show a styled scrollable player menu with its visible rows and scroll position.
-Status: Awaiting manual capture; see SCREENSHOT_CHECKLIST.md.
--->
+### Menus in game
 
-<!-- SCREENSHOT TODO S07
-File: docs/images/third-party-colours.png
-Capture: Show styled entries with intentional inline colours from Loot Filters and Identificator.
-Status: Awaiting manual capture; see SCREENSHOT_CHECKLIST.md.
--->
+This Menu Entry Swapper example shows a styled parent and child menu together:
+
+![Styled parent and child Drakan's medallion menus with Menu Entry Swapper's Swap left-click action](images/styled-submenu.png)
+
+On a large Grand Exchange player menu, the game still supplies the scroll position and click areas:
+
+<img src="images/scrollable-menu.png" alt="A large styled Grand Exchange player menu with native scrolling and a child menu" width="720">
 
 ## Troubleshooting
 
