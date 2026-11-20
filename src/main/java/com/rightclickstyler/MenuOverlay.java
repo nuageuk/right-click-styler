@@ -1,6 +1,5 @@
 package com.rightclickstyler;
 
-import com.google.gson.Gson;
 import java.awt.AlphaComposite;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
@@ -28,11 +27,6 @@ class MenuOverlay extends Overlay
 	private static final int NO_ITEM = -1;
 	private static final int EXACT_CONTRADICTION_LOG_LIMIT = 20;
 	private static final int IMAGE_CACHE_MISMATCH_LOG_LIMIT = 10;
-	private static final boolean MENU_CAPTURE_ENABLED = Boolean.getBoolean("rightclickstyler.menuCapture");
-	private static final String MENU_CAPTURE_CONTAINS = System.getProperty("rightclickstyler.menuCaptureContains", "");
-	private static final String MENU_CAPTURE_PATH = System.getProperty("rightclickstyler.menuCapturePath", "");
-	private static final int MENU_CAPTURE_LIMIT = 2;
-	private static final Gson MENU_CAPTURE_JSON = new Gson();
 	private static final boolean SUBMENU_TRACE_ENABLED = Boolean.getBoolean("rightclickstyler.submenuTrace");
 	private static final int SUBMENU_TRACE_LIMIT = 24;
 	/** Opt-in with the submenu trace: one line per distinct outcome and geometry. */
@@ -145,8 +139,6 @@ class MenuOverlay extends Overlay
 	private long submenuClosedDrops;
 	private long submenuChangedDrops;
 	private boolean submenuBlitFailed;
-	private boolean menuCapturePending;
-	private int menuCaptureCount;
 	private int submenuTraceLogs;
 	private int submenuTraceRepeat;
 	private Menu submenuTraceRoot;
@@ -198,7 +190,6 @@ class MenuOverlay extends Overlay
 	synchronized void menuOpened()
 	{
 		clearPrepared();
-		menuCapturePending = MENU_CAPTURE_ENABLED && menuCaptureCount < MENU_CAPTURE_LIMIT;
 		submenuTraceRoot = null;
 		submenuTraceState = null;
 		submenuTraceDetail = null;
@@ -696,27 +687,6 @@ class MenuOverlay extends Overlay
 			preparedScrollable = scrollable;
 			preparedScroll = scroll;
 			prepared = true;
-			if (menuCapturePending)
-			{
-				Graphics2D captureGraphics = submenuImage.createGraphics();
-				try
-				{
-					captureGraphics.translate(-region.x, -region.y);
-					for (int depth = 0; depth <= chain.length && menuCapturePending; depth++)
-					{
-						SubmenuTree.Node node = menuNode(tree, chain, depth);
-						int capturedHover = depth == 0 ? viewport.hoverIndex(frameMouse)
-							: hoverIndex(node.bounds, submenuRowBuffer(depth).rows.size(), frameMouse);
-						captureMenu(captureGraphics, theme, submenuRowBuffer(depth).rows, node.bounds,
-							capturedHover, node.header,
-							depth == 0 ? "submenu-root-prepared" : "submenu-child-prepared");
-					}
-				}
-				finally
-				{
-					captureGraphics.dispose();
-				}
-			}
 			SubmenuOutcome ready = equivalent != null ? SubmenuOutcome.READY_WITH_EQUIVALENT_CHILD
 				: identified != null ? SubmenuOutcome.READY_WITH_NATIVE_IDENTIFIED_CHILD
 				: chain.length == 0 ? SubmenuOutcome.READY_ROOT_ONLY
@@ -1438,43 +1408,6 @@ class MenuOverlay extends Overlay
 		Player local = client.getLocalPlayer();
 		int localLevel = local != null ? local.getCombatLevel() : 0;
 		renderer.render(graphics, client, theme, config, rows, bounds, hoverIndex, localLevel);
-		captureMenu(graphics, theme, rows, bounds, hoverIndex, null, "ordinary-overlay");
-	}
-
-	private void captureMenu(Graphics2D graphics, Theme theme, List<MenuRenderer.Row> entries,
-		Rectangle menuBounds, int hovered, String header, String path)
-	{
-		if (!menuCapturePending || menuCaptureCount >= MENU_CAPTURE_LIMIT
-			|| (!MENU_CAPTURE_PATH.isEmpty() && !path.startsWith(MENU_CAPTURE_PATH)))
-		{
-			return;
-		}
-		if (!MENU_CAPTURE_CONTAINS.isEmpty())
-		{
-			boolean match = header != null && header.contains(MENU_CAPTURE_CONTAINS);
-			for (MenuRenderer.Row row : entries)
-			{
-				match |= row.option() != null && row.option().contains(MENU_CAPTURE_CONTAINS);
-				match |= row.target() != null && row.target().contains(MENU_CAPTURE_CONTAINS);
-			}
-			if (!match)
-			{
-				return;
-			}
-		}
-		menuCapturePending = false;
-		menuCaptureCount++;
-		try
-		{
-			MenuRenderer.GeometryCapture capture = renderer.inspectGeometry(graphics, client, theme,
-				config, entries, menuBounds, hovered, header, path,
-				client.getCanvasWidth(), client.getCanvasHeight());
-			log.info("RCS_MENU_GEOMETRY {}", MENU_CAPTURE_JSON.toJson(capture));
-		}
-		catch (RuntimeException e)
-		{
-			log.warn("Menu geometry capture failed", e);
-		}
 	}
 
 	static void setNativeBounds(Rectangle target, Menu menu)

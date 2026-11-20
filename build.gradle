@@ -48,18 +48,6 @@ tasks.register('run', JavaExec) {
 	mainClass = pluginMainClass
 
 	jvmArgs "-ea"
-	if (project.hasProperty('menuCapture')) {
-		jvmArgs '-Drightclickstyler.menuCapture=true'
-		if (project.hasProperty('menuCaptureContains')) {
-			jvmArgs "-Drightclickstyler.menuCaptureContains=${project.property('menuCaptureContains')}"
-		}
-		if (project.hasProperty('menuCaptureBuild')) {
-			jvmArgs "-Drightclickstyler.menuCaptureBuild=${project.property('menuCaptureBuild')}"
-		}
-		if (project.hasProperty('menuCapturePath')) {
-			jvmArgs "-Drightclickstyler.menuCapturePath=${project.property('menuCapturePath')}"
-		}
-	}
 	if (project.hasProperty('submenuTrace')) {
 		jvmArgs '-Drightclickstyler.submenuTrace=true'
 	}

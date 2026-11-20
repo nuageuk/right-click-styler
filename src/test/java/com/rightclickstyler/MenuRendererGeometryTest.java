@@ -1,12 +1,14 @@
 package com.rightclickstyler;
 
 import java.awt.Color;
+import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.Rectangle;
 import java.awt.image.BufferedImage;
 import java.util.Collections;
 import java.util.Arrays;
 import org.junit.Test;
+import net.runelite.client.ui.FontManager;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -91,9 +93,9 @@ public class MenuRendererGeometryTest
 		Graphics2D graphics = image.createGraphics();
 		try
 		{
-			return new MenuRenderer().inspectGeometry(graphics, null, theme, CONFIG,
-				Collections.singletonList(row), new Rectangle(10, 10, 500, 49), -1,
-				"Choose Option", "test", 500, 65).rows.get(0).contentWidth;
+			FontMetrics metrics = graphics.getFontMetrics(FontManager.getRunescapeBoldFont());
+			return metrics.stringWidth(row.option()) + metrics.charWidth(' ')
+				+ metrics.stringWidth("Saw");
 		}
 		finally
 		{
