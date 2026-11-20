@@ -2111,6 +2111,181 @@ public class NativeSubmenuCycleTest
 		assertFalse((boolean) field(harness.overlay, "prepared"));
 	}
 
+	// ---- Failed final draws: native for the rest of the opening, a fresh attempt on the next ----
+
+	/** A consumed frame whose visible root text changes before the overlay draws: blank, then native. */
+	private static void failFinalDraw(String context, Harness harness, NativeModel model) throws Exception
+	{
+		harness.afterPrepare = () -> model.rootEntryOptions[ROOT_ENTRY_WITH_CHILD] += "!";
+		Frame frame = harness.frame();
+		harness.afterPrepare = () -> { };
+		assertEquals(context + ": the consumed frame is lost", Shown.BLANK, frame.shown);
+		assertTrue(context, (boolean) field(harness.overlay, "submenuBlitFailed"));
+	}
+
+	/** Native, and not even probed: no identification is retried in a failed opening. */
+	private static void assertNativeWithoutRetry(String context, Frame frame)
+	{
+		assertEquals(context, Shown.NATIVE, frame.shown);
+		assertEquals(context + ": no retry in the failed opening", 0, frame.nativeDraws);
+	}
+
+	@Test
+	public void failedFinalDrawKeepsTheRestOfTheOpeningNativeWithoutRetrying() throws Exception
+	{
+		NativeModel model = openRowFifteen();
+		Harness harness = harness(model);
+		assertThemedNativeState("before", harness.frame(), model);
+		failFinalDraw("failure", harness, model);
+		for (int i = 0; i < 5; i++)
+		{
+			assertNativeWithoutRetry("unchanged frame " + i, harness.frame());
+		}
+		model.live = new Point(549, 300);
+		assertNativeWithoutRetry("pointer moved", harness.frame());
+		hoverRow(model, 18);
+		assertTrue("native switched child", model.open == model.childAtRow(18));
+		assertNativeWithoutRetry("native submenu switch", harness.frame());
+		model.scroll = 1;
+		assertNativeWithoutRetry("scrolled", harness.frame());
+		model.rootEntryOptions[ROOT_ENTRY_WITH_CHILD] = "Root 40";
+		assertNativeWithoutRetry("entries restored", harness.frame());
+		assertEquals("one blank frame only", 1L, field(harness.overlay, "submenuChangedDrops"));
+	}
+
+	@Test
+	public void nextOpeningIsThemedAfterFreshVerification() throws Exception
+	{
+		NativeModel model = openRowFifteen();
+		Harness harness = harness(model);
+		assertThemedNativeState("before", harness.frame(), model);
+		failFinalDraw("failure", harness, model);
+		assertNativeWithoutRetry("same opening", harness.frame());
+		harness.reopen();
+		assertFalse((boolean) field(harness.overlay, "submenuBlitFailed"));
+		// One native probe draw: the open child is identified and verified from scratch.
+		Frame fresh = harness.frame();
+		assertThemedNativeState("next opening", fresh, model);
+		if (imageCache)
+		{
+			assertEquals("rendered afresh, never reused from the failed opening",
+				SubmenuImageCache.Miss.EMPTY, harness.lastMiss());
+		}
+		// A per-frame fallback in the new opening is native as usual, and does not end it.
+		model.afterNativeDraw = () -> model.bufferOverride = new int[model.pixels.length];
+		assertEquals("buffer replaced during the probe", Shown.NATIVE, harness.frame().shown);
+		assertEquals(1L, outcome(harness, MenuOverlay.SubmenuOutcome.FALLBACK_BUFFER_MISMATCH));
+		model.afterNativeDraw = () -> { };
+		model.bufferOverride = null;
+		assertThemedNativeState("verified again", harness.frame(), model);
+		// Failing again ends this opening too.
+		failFinalDraw("second failure", harness, model);
+		assertNativeWithoutRetry("second failed opening", harness.frame());
+	}
+
+	@Test
+	public void repeatedFailuresAndRecoveriesStayStable() throws Exception
+	{
+		NativeModel model = openRowFifteen();
+		Harness harness = harness(model);
+		for (int round = 0; round < 10; round++)
+		{
+			String context = "round " + round;
+			assertThemedNativeState(context, harness.frame(), model);
+			failFinalDraw(context, harness, model);
+			assertNativeWithoutRetry(context, harness.frame());
+			harness.reopen();
+			// A clean opening, including a callback-only change kept by the final re-check.
+			assertThemedNativeState(context + " recovered", harness.frame(), model);
+			harness.afterPrepare = () -> replaceRootCallback(model, 0); // entry 40 must stay text-driven
+			assertThemedNativeState(context + " callback changed", harness.frame(), model);
+			harness.afterPrepare = () -> { };
+			harness.reopen();
+			assertEquals(context + ": a clean opening ends the run of failures",
+				0, field(harness.overlay, "failedOpenings"));
+		}
+		assertEquals(10L, field(harness.overlay, "submenuChangedDrops"));
+		assertEquals(10L, field(harness.overlay, "submenuEquivalentBlits"));
+		assertFalse((boolean) field(harness.overlay, "submenuDisabled"));
+	}
+
+	@Test
+	public void failuresOnConsecutiveOpeningsEndSubmenuStylingUntilRestart() throws Exception
+	{
+		NativeModel model = openRowFifteen();
+		Harness harness = harness(model);
+		for (int opening = 1; opening <= MenuOverlay.FAILED_OPENINGS_LIMIT; opening++)
+		{
+			// Themed frames before the failure do not make the opening a clean one.
+			assertThemedNativeState("opening " + opening, harness.frame(), model);
+			failFinalDraw("opening " + opening, harness, model);
+			harness.reopen();
+		}
+		assertTrue((boolean) field(harness.overlay, "submenuDisabled"));
+		for (int opening = 0; opening < 3; opening++)
+		{
+			assertNativeWithoutRetry("disabled opening " + opening, harness.frame());
+			harness.reopen();
+		}
+		assertEquals("one blank frame per failed opening, then none",
+			(long) MenuOverlay.FAILED_OPENINGS_LIMIT, field(harness.overlay, "submenuChangedDrops"));
+		// The plugin restarts (startUp) with the menu closed.
+		model.menuOpen = false;
+		harness.overlay.resetFailure();
+		harness.plugin.onMenuOpened(null);
+		model.menuOpen = true;
+		assertThemedNativeState("after restart", harness.frame(), model);
+	}
+
+	@Test
+	public void rapidReopeningAndPendingFramesReuseNoState() throws Exception
+	{
+		NativeModel model = openRowFifteen();
+		Harness harness = harness(model);
+		assertThemedNativeState("before", harness.frame(), model);
+		failFinalDraw("failure", harness, model);
+		// Two openings with no frame between them.
+		harness.reopen();
+		harness.reopen();
+		assertThemedNativeState("after rapid reopening", harness.frame(), model);
+		assertEquals("an opening with no frames is neither clean nor failed",
+			1, field(harness.overlay, "failedOpenings"));
+		// A prepared frame never survives an opening, even one in the same client frame.
+		harness.afterPrepare = () -> harness.plugin.onMenuOpened(null);
+		Frame reopened = harness.frame();
+		assertEquals("the prepared image is not drawn", Shown.BLANK, reopened.shown);
+		assertFalse("a discarded frame is not a failed draw", (boolean) field(harness.overlay, "submenuBlitFailed"));
+		harness.afterPrepare = () -> { };
+		assertThemedNativeState("next frame", harness.frame(), model);
+	}
+
+	@Test
+	public void restartDuringAFailedOpeningKeepsThatOpeningNative() throws Exception
+	{
+		for (boolean openAtRestart : new boolean[]{true, false})
+		{
+			String context = openAtRestart ? "restarted with the failed menu open" : "restarted with the menu closed";
+			NativeModel model = openRowFifteen();
+			Harness harness = harness(model);
+			assertThemedNativeState(context + ": before", harness.eventFrame(), model);
+			failFinalDraw(context, harness, model);
+			harness.stopPlugin();
+			assertFalse(context, (boolean) field(harness.overlay, "prepared"));
+			// startUp, as it runs on the EDT.
+			model.menuOpen = openAtRestart;
+			harness.overlay.resetFailure();
+			model.menuOpen = true;
+			setField(harness.plugin, "running", true);
+			if (openAtRestart)
+			{
+				// No MenuOpened since the failure: still the failed opening.
+				assertNativeWithoutRetry(context, harness.eventFrame());
+				harness.reopen();
+			}
+			assertThemedNativeState(context + ": next opening", harness.eventFrame(), model);
+		}
+	}
+
 	@Test
 	public void nativeChildSwitchIsThemedOnTheCycleItHappens() throws Exception
 	{
@@ -2387,6 +2562,29 @@ public class NativeSubmenuCycleTest
 			plugin.shutDown();
 		}
 
+		/**
+		 * The menu closes, the overlay draws a frame with it closed (BeforeMenuRender is not
+		 * posted for a closed menu), then the client opens it again: MenuOpened, then open.
+		 */
+		private void reopen() throws Exception
+		{
+			model.menuOpen = false;
+			long blits = (long) field(overlay, "submenuBlits");
+			BufferedImage output = new BufferedImage(CANVAS_WIDTH, CANVAS_HEIGHT, BufferedImage.TYPE_INT_ARGB);
+			Graphics2D graphics = output.createGraphics();
+			try
+			{
+				assertEquals(null, overlay.render(graphics));
+			}
+			finally
+			{
+				graphics.dispose();
+			}
+			assertEquals("nothing is drawn for a closed menu", blits, field(overlay, "submenuBlits"));
+			plugin.onMenuOpened(null);
+			model.menuOpen = true;
+		}
+
 		private Frame frame(boolean viaEvent) throws Exception
 		{
 			int[] before = model.pixels.clone();
@@ -2481,6 +2679,8 @@ public class NativeSubmenuCycleTest
 		private final int[] pixels = new int[CANVAS_WIDTH * CANVAS_HEIGHT];
 		private final Client client;
 		private GameState gameState = GameState.LOGGED_IN;
+		/** The client's menu-open flag; MenuOpened is posted before it is set. */
+		private boolean menuOpen = true;
 		private Point live;
 		private NativeMenu open;
 		private boolean hasPending;
@@ -2549,7 +2749,7 @@ public class NativeSubmenuCycleTest
 					beforeEachClientCall.run();
 					switch (method.getName())
 					{
-						case "isMenuOpen": return true;
+						case "isMenuOpen": return menuOpen;
 						case "getGameState": return gameState;
 						case "getMenu": return root;
 						case "isMenuScrollable": return scrollable;

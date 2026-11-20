@@ -179,7 +179,7 @@ public class RightClickStylerPlugin extends Plugin
 				// Final: native drawing is skipped once this returns. A structural change
 				// before the overlay draws keeps the image only if it cannot change it; any
 				// other change, or a failed draw, leaves this one frame without a menu and
-				// returns later frames to native drawing. drawOriginalMenu is called only
+				// keeps the rest of this menu opening native. drawOriginalMenu is called only
 				// here, where native drawing itself happens: the overlay pass cannot read the
 				// rasterizer clip such a late native draw would depend on.
 				event.consume();
@@ -192,6 +192,7 @@ public class RightClickStylerPlugin extends Plugin
 		return true;
 	}
 
+	/** Each root-menu opening: the only point at which a failed opening's native fallback ends. */
 	@Subscribe
 	public void onMenuOpened(MenuOpened event)
 	{

@@ -148,7 +148,22 @@ class MenuOverlay extends Overlay
 	private long submenuEquivalentBlits;
 	private long submenuClosedDrops;
 	private long submenuChangedDrops;
+	/**
+	 * A consumed frame failed its final draw in this menu opening. Submenus stay native, without
+	 * being probed, for the rest of the opening; {@link #menuOpened} ends it.
+	 */
 	private boolean submenuBlitFailed;
+	/** A consumed frame was themed in this menu opening. */
+	private boolean openingBlitted;
+	/** Consecutive menu openings that ended with a failed final draw. */
+	private int failedOpenings;
+	/**
+	 * A failure that recurs on every opening (a draw that always fails, or another plugin that
+	 * changes the menu mid-frame each time) would otherwise blank one frame per opening: after
+	 * this many consecutive failed openings, submenus stay native until the plugin restarts.
+	 */
+	static final int FAILED_OPENINGS_LIMIT = 3;
+	private boolean submenuDisabled;
 	private int submenuTraceLogs;
 	private final boolean[] tracedOutcomes = new boolean[SubmenuOutcome.values().length];
 
@@ -177,23 +192,49 @@ class MenuOverlay extends Overlay
 		imageCache.invalidate();
 	}
 
+	/** From startUp: a restart ends every failure state, except a failed opening still on screen. */
 	void resetFailure()
 	{
 		failed = false;
-		submenuBlitFailed = false;
-		clearPrepared();
 		synchronized (this)
 		{
+			clearPrepared();
 			imageCache.invalidate();
 			nativeChildImages.clear();
+			// No MenuOpened was seen for an open menu, so it may be the failed opening: keep it
+			// native until the next opening. Reads one client flag; no rendering state.
+			submenuBlitFailed = submenuBlitFailed && client.isMenuOpen();
+			openingBlitted = false;
+			failedOpenings = 0;
+			submenuDisabled = false;
 		}
 	}
 
-	/** RuneLite reuses the root Menu object, so a new opening must end any prepared frame. */
+	/**
+	 * RuneLite posts MenuOpened from the client's root-menu opening, before the menu is marked
+	 * open, on every opening; native submenu changes do not pass through it. It therefore ends
+	 * the previous opening, however it closed, before anything of the new one is probed or drawn.
+	 * RuneLite reuses the root Menu object, so the opening must also end any prepared frame.
+	 */
 	synchronized void menuOpened()
 	{
 		clearPrepared();
 		nativeChildImages.clear();
+		if (submenuBlitFailed)
+		{
+			// Nothing drawn for the failed opening is reused: the next image is rendered afresh.
+			imageCache.invalidate();
+			if (++failedOpenings >= FAILED_OPENINGS_LIMIT)
+			{
+				submenuDisabled = true;
+			}
+		}
+		else if (openingBlitted)
+		{
+			failedOpenings = 0;
+		}
+		submenuBlitFailed = false;
+		openingBlitted = false;
 	}
 
 	synchronized void discardPreparedAtEventStart()
@@ -259,7 +300,7 @@ class MenuOverlay extends Overlay
 		}
 		boolean scrollable = client.isMenuScrollable();
 		int scroll = scrollable ? client.getMenuScroll() : 0;
-		if (submenuBlitFailed)
+		if (submenuBlitFailed || submenuDisabled)
 		{
 			recordOutcome(SubmenuOutcome.FALLBACK_RENDER_EXCEPTION);
 			return false;
@@ -1160,6 +1201,7 @@ class MenuOverlay extends Overlay
 				else if (graphics.drawImage(submenuImage, preparedX, preparedY, null))
 				{
 					submenuBlits++;
+					openingBlitted = true;
 					if (equivalent)
 					{
 						submenuEquivalentBlits++;
@@ -1176,7 +1218,7 @@ class MenuOverlay extends Overlay
 			{
 				submenuBlitFailed = true;
 				traceFinalDrop(e.getClass().getSimpleName() + ": " + e.getMessage());
-				log.warn("Submenu final image draw failed; native menus resume on subsequent frames", e);
+				log.warn("Submenu final image draw failed; native submenus until the menu is next opened", e);
 			}
 			finally
 			{
