@@ -46,6 +46,8 @@ If you use Interface Styles, turn off **High detail menu** and set **Menu alpha*
 
 For every setting, theme sharing, RuneLite profiles and troubleshooting, read the [full settings guide](docs/GUIDE.md).
 
+See the [changelog](CHANGELOG.md) for release history.
+
 ## License
 
 BSD 2-Clause. See [LICENSE](LICENSE).
