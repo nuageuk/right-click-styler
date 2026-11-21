@@ -74,6 +74,7 @@ final class MenuRenderer
 	};
 
 	private final Map<Integer, BufferedImage> modIconCache = new HashMap<>();
+	private final Map<Integer, IndexedSprite> modIconSprites = new HashMap<>();
 	private final Map<String, OptionSegments> optionCache = boundedCache();
 	private final Map<String, List<Run>> targetCache = boundedCache();
 	// Kept apart from targetCache so hiding combat levels never runs a regex per frame.
@@ -180,6 +181,7 @@ final class MenuRenderer
 		if (currentIcons != modIconSource)
 		{
 			modIconCache.clear();
+			modIconSprites.clear();
 			modIconSource = currentIcons;
 		}
 		this.client = client;
@@ -696,20 +698,23 @@ final class MenuRenderer
 
 	private BufferedImage modIcon(int index)
 	{
-		BufferedImage cached = modIconCache.get(index);
-		if (cached != null)
-		{
-			return cached;
-		}
 		IndexedSprite[] icons = client != null ? client.getModIcons() : null;
 		if (icons == null || index < 0 || index >= icons.length || icons[index] == null)
 		{
+			modIconCache.remove(index);
+			modIconSprites.remove(index);
 			return null;
+		}
+		BufferedImage cached = modIconCache.get(index);
+		if (cached != null && modIconSprites.get(index) == icons[index])
+		{
+			return cached;
 		}
 		BufferedImage built = buildModIcon(icons[index]);
 		if (built != null)
 		{
 			modIconCache.put(index, built);
+			modIconSprites.put(index, icons[index]);
 		}
 		return built;
 	}
@@ -735,7 +740,7 @@ final class MenuRenderer
 		return image;
 	}
 
-	private static Font buildFont(FontChoice choice, int size)
+	static Font buildFont(FontChoice choice, int size)
 	{
 		if (choice.isScalable())
 		{

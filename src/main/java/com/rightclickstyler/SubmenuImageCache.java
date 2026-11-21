@@ -4,6 +4,7 @@ import java.awt.Rectangle;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import net.runelite.api.IndexedSprite;
 
 /**
  * Reuse of the submenu's themed image. The probe, the exact-coverage
@@ -58,7 +59,7 @@ final class SubmenuImageCache
 	 * @return the key, or null when an input cannot be read reliably (the frame then renders
 	 * uncached and nothing is stored)
 	 */
-	static Key capture(Theme theme, RightClickStylerConfig config, Object modIcons, int localLevel,
+	static Key capture(Theme theme, RightClickStylerConfig config, IndexedSprite[] modIcons, int localLevel,
 		Rectangle region, Menu[] menus)
 	{
 		Object[] values;
@@ -134,16 +135,16 @@ final class SubmenuImageCache
 	{
 		private final Theme theme;
 		private final Object[] config;
-		private final Object modIcons;
+		private final IndexedSprite[] modIcons;
 		private final int localLevel;
 		private final Rectangle region;
 		private final Menu[] menus;
 
-		private Key(Theme theme, Object[] config, Object modIcons, int localLevel, Rectangle region, Menu[] menus)
+		private Key(Theme theme, Object[] config, IndexedSprite[] modIcons, int localLevel, Rectangle region, Menu[] menus)
 		{
 			this.theme = theme;
 			this.config = config;
-			this.modIcons = modIcons;
+			this.modIcons = modIcons == null ? null : modIcons.clone();
 			this.localLevel = localLevel;
 			this.region = region;
 			this.menus = menus;
@@ -160,7 +161,7 @@ final class SubmenuImageCache
 			{
 				return Miss.CONFIG;
 			}
-			if (modIcons != other.modIcons)
+			if (!Arrays.equals(modIcons, other.modIcons))
 			{
 				return Miss.ICONS;
 			}

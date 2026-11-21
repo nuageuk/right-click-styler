@@ -51,3 +51,7 @@ See the [changelog](CHANGELOG.md) for release history.
 ## License
 
 BSD 2-Clause. See [LICENSE](LICENSE).
+
+## Integrations
+
+[Plugin messages](PLUGIN_MESSAGES.md) let other overlays optionally follow the active menu style.
