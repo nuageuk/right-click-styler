@@ -70,6 +70,9 @@ public class RightClickStylerPlugin extends Plugin
 	@Inject
 	private ThemeManager themeManager;
 
+	@Inject
+	private StylePublisher stylePublisher;
+
 	// Created in startUp() rather than injected: RuneLite installs its look and feel after plugins
 	// load, and Swing components built before that keep the default light styling. Volatile because
 	// ConfigChanged can arrive on any thread.
@@ -102,12 +105,14 @@ public class RightClickStylerPlugin extends Plugin
 
 		updateInterfaceStylesWarning();
 		running = true;
+		stylePublisher.start();
 	}
 
 	@Override
 	protected void shutDown()
 	{
 		running = false;
+		stylePublisher.stop();
 		menuOverlay.clearPrepared();
 		overlayManager.remove(menuOverlay);
 		if (navigationButton != null)

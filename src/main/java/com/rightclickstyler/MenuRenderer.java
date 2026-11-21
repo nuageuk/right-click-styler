@@ -740,7 +740,7 @@ final class MenuRenderer
 		return image;
 	}
 
-	private static Font buildFont(FontChoice choice, int size)
+	static Font buildFont(FontChoice choice, int size)
 	{
 		if (choice.isScalable())
 		{
