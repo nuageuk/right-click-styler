@@ -9,6 +9,7 @@ import java.awt.RenderingHints;
 import java.awt.Shape;
 import java.awt.geom.RoundRectangle2D;
 import java.awt.image.BufferedImage;
+import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -794,6 +795,25 @@ final class MenuRenderer
 		return runs;
 	}
 
+	/**
+	 * Each visible text run of a target paired with the colour a row of {@code kind} draws it
+	 * in, in drawing order. Package-private so tests can check every span without a Graphics.
+	 */
+	List<Map.Entry<String, Color>> targetRunColours(RightClickStylerConfig config, String target,
+		TargetKind kind, int localCombatLevel)
+	{
+		targetColours.load(config, localCombatLevel);
+		List<Map.Entry<String, Color>> resolved = new ArrayList<>();
+		for (Run run : targetRuns(target))
+		{
+			if (run.iconIndex < 0 && !run.text.trim().isEmpty())
+			{
+				resolved.add(new AbstractMap.SimpleImmutableEntry<>(run.text, targetColours.resolve(run, kind)));
+			}
+		}
+		return resolved;
+	}
+
 	private static String clean(String raw)
 	{
 		return raw == null ? "" : Limits.truncate(raw, MAX_ENTRY_LENGTH);
@@ -824,13 +844,18 @@ final class MenuRenderer
 		Color current = null;
 		int colourSpan = -1;
 		boolean uncolouredPrefix = false;
+		// A colour tag only starts a new span once the current one has shown text, so a tag
+		// that immediately replaces another (or follows only an icon) keeps the same span.
+		boolean spanHasText = false;
 		while (matcher.find())
 		{
 			if (matcher.start() > last)
 			{
 				String text = collapse(raw.substring(last, matcher.start()));
 				runs.add(new Run(text, current, colourSpan));
-				uncolouredPrefix |= colourSpan < 0 && !text.trim().isEmpty();
+				boolean visible = !text.trim().isEmpty();
+				uncolouredPrefix |= colourSpan < 0 && visible;
+				spanHasText |= colourSpan >= 0 && visible;
 			}
 			last = matcher.end();
 
@@ -840,7 +865,15 @@ final class MenuRenderer
 			if (col.matches())
 			{
 				current = new Color(Integer.parseInt(col.group(1), 16));
-				colourSpan = colourSpan < 0 && uncolouredPrefix ? 1 : colourSpan + 1;
+				if (colourSpan < 0)
+				{
+					colourSpan = uncolouredPrefix ? 1 : 0;
+				}
+				else if (spanHasText)
+				{
+					colourSpan++;
+				}
+				spanHasText = false;
 			}
 			else if (inner.equalsIgnoreCase(CLOSE_COL))
 			{
