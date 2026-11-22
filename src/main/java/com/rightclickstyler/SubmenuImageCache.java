@@ -13,7 +13,8 @@ import net.runelite.api.IndexedSprite;
  * image already in the buffer.
  *
  * <p>The key is the complete input of {@link MenuRenderer} as the overlay calls it: the theme
- * (immutable, compared by identity), every plugin config item, the mod-icon source,
+ * (immutable, compared by identity), every plugin config item, a copy of the mod-icon array
+ * (compared sprite by sprite, so replacing a sprite in place is a miss),
  * the local combat level, the image region, and for each drawn menu its
  * bounds, header, root scroll offset, hovered row and every row's option, target, kind and
  * submenu arrow. Contents are compared by value, never by menu or entry identity, and never by
@@ -179,7 +180,7 @@ final class SubmenuImageCache
 
 	/**
 	 * The first per-menu input class that differs between two drawn chains, HIT when the
-	 * renderer would receive equal inputs for every menu. With one theme, config, icon source
+	 * renderer would receive equal inputs for every menu. With one theme, config, set of icon sprites
 	 * and level, HIT means the two chains render identical pixels: the same rule that lets the
 	 * cache reuse an image. Callbacks and entry identity are deliberately not inputs.
 	 */

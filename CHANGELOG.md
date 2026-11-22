@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.1.1] — 2026-11-22
+
+### Added
+
+- A **Reset Combat Colours to Defaults** control. It restores the lower, same and higher level colours and keeps the selected mode.
+- Confirmation before **Revert** discards unsaved theme edits, and before either colour reset replaces your current colours. Nothing is asked when there is nothing to discard or reset.
+- Optional styling integration for compatible overlays such as Improved Right-Clicks, using RuneLite plugin messages. See [Plugin messages](PLUGIN_MESSAGES.md). Contributed by wukuna in PR #5.
+
+### Improved
+
+- Inline icon caching and the inactive style message, which now also carries `version=1`.
+
+### Fixed
+
+- Inline menu icons now update when another plugin replaces them, including in styled submenus. Contributed by wukuna in PR #5.
+- Custom target colours now apply to ground items rewritten by Loot Filters. Colours set by filter rules are still preserved.
+
+### Compatibility
+
+- No configuration keys or saved theme formats changed. Existing themes, exports and profiles remain supported.
+- Right Click Styler works on its own; the style integration is optional.
+
+### Known limitations
+
+- The 1.1.0 known limitations still apply.
+- In Custom target mode, the second item of a combined target, such as **Use Knife -> Logs**, keeps the game's colour.
+
 ## [1.1.0] — 2026-11-20
 
 ### Added

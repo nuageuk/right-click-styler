@@ -34,7 +34,7 @@ The five built-in themes are protected presets, marked with a lock icon. You can
 - **Theme list**: selects and activates a theme. Switching themes asks before discarding unsaved edits.
 - **Save**: overwrites the selected custom theme with its current edits. It is unavailable for built-in themes and when nothing has changed.
 - **Save as…**: saves the current visible appearance as a new custom theme and selects it. Use this to keep edits made to a built-in theme.
-- **Revert**: discards unsaved edits and restores the selected theme's saved appearance.
+- **Revert**: discards unsaved edits and restores the selected theme's saved appearance. It is unavailable when nothing has changed. It asks for confirmation first: choose **Revert changes** to discard the edits, or **Cancel** to keep editing.
 - **More**:
   - **Rename**: renames the selected custom theme.
   - **Duplicate**: makes and selects a copy of the selected theme. Unsaved edits must be discarded first, so the copy uses the selected theme's saved appearance.
@@ -133,7 +133,7 @@ The target is the thing an action is used on, such as "Guard" in "Attack Guard".
 
 The default custom colours are yellow for NPCs, white for players, orange for items, cyan for objects and white for Other.
 
-Choose **Reset Target Colours to Defaults** in the Targets section to restore those five colour values. It leaves the selected mode, combat-level settings, action rules and saved themes alone. In Custom mode, colours explicitly added within a target by the game or another plugin are preserved where they differ from the game's usual category colour; results can vary with the source formatting.
+Choose **Reset Target Colours to Defaults** in the Targets section to restore those five colour values. It is available in Custom mode and asks for confirmation first: choose **Reset colours** to continue, or **Cancel** to keep your current colours. Nothing is asked, and nothing changes, when the colours already match their defaults. It leaves the selected mode, combat-level settings, action rules and saved themes alone. In Custom mode, colours explicitly added within a target by the game or another plugin are preserved where they differ from the game's usual category colour; results can vary with the source formatting.
 
 ## Combat levels
 
@@ -146,6 +146,8 @@ These settings control the `(level-N)` text after NPC and player names independe
 - **Mode > Hide**: removes level text while preserving the game's native menu width.
 
 The default custom colours are green for lower levels, yellow for the same level and red for higher levels.
+
+Choose **Reset Combat Colours to Defaults** to restore the Lower level, Same level and Higher level colours. Like the target reset, it is available in Custom mode, asks for confirmation first and does nothing when the colours already match their defaults. It leaves the selected mode, target settings, action rules and saved themes alone.
 
 Combat-level mode takes precedence over target mode for the level portion. For example, Custom target colours can colour an NPC name while Custom combat colours independently colour its level. Action highlights affect only the action before the target.
 
