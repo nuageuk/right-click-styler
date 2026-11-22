@@ -46,7 +46,10 @@ final class StylePublisher
 			if (!active)
 			{
 				lastSent = null;
-				eventBus.post(new PluginMessage(NAMESPACE, "style", Collections.singletonMap("active", false)));
+				Map<String, Object> inactive = new LinkedHashMap<>();
+				inactive.put("version", 1);
+				inactive.put("active", Boolean.FALSE);
+				eventBus.post(new PluginMessage(NAMESPACE, "style", Collections.unmodifiableMap(inactive)));
 			}
 		});
 	}

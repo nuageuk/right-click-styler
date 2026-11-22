@@ -700,22 +700,23 @@ final class MenuRenderer
 	private BufferedImage modIcon(int index)
 	{
 		IndexedSprite[] icons = client != null ? client.getModIcons() : null;
-		if (icons == null || index < 0 || index >= icons.length || icons[index] == null)
+		IndexedSprite sprite = icons != null && index >= 0 && index < icons.length ? icons[index] : null;
+		if (sprite == null)
 		{
 			modIconCache.remove(index);
 			modIconSprites.remove(index);
 			return null;
 		}
 		BufferedImage cached = modIconCache.get(index);
-		if (cached != null && modIconSprites.get(index) == icons[index])
+		if (cached != null && modIconSprites.get(index) == sprite)
 		{
 			return cached;
 		}
-		BufferedImage built = buildModIcon(icons[index]);
+		BufferedImage built = buildModIcon(sprite);
 		if (built != null)
 		{
 			modIconCache.put(index, built);
-			modIconSprites.put(index, icons[index]);
+			modIconSprites.put(index, sprite);
 		}
 		return built;
 	}
