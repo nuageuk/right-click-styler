@@ -20,6 +20,7 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.BiFunction;
@@ -140,6 +141,15 @@ class RightClickStylerPanel extends PluginPanel
 		RightClickStylerConfig.KEY_ITEM_COLOUR,
 		RightClickStylerConfig.KEY_OBJECT_COLOUR,
 		RightClickStylerConfig.KEY_OTHER_COLOUR
+	};
+	private static final String[] COMBAT_COLOUR_KEYS = {
+		RightClickStylerConfig.KEY_LOWER_LEVEL_COLOUR,
+		RightClickStylerConfig.KEY_SAME_LEVEL_COLOUR,
+		RightClickStylerConfig.KEY_HIGHER_LEVEL_COLOUR
+	};
+	// Every setting at its declared default, for telling whether a reset would change anything.
+	private static final RightClickStylerConfig DEFAULT_CONFIG = new RightClickStylerConfig()
+	{
 	};
 	private static final Consumer<Color> NOTHING = c ->
 	{
@@ -356,8 +366,10 @@ class RightClickStylerPanel extends PluginPanel
 
 		revertButton.addActionListener(e ->
 		{
-			themeManager.revert();
-			refresh();
+			if (revertEdits(themeManager, this::confirmRevert))
+			{
+				refresh();
+			}
 		});
 		buttons.add(compact(revertButton));
 
@@ -651,7 +663,55 @@ class RightClickStylerPanel extends PluginPanel
 
 	private void resetTargetColours()
 	{
-		resetTargetColourSettings(key -> configManager.unsetConfiguration(RightClickStylerConfig.GROUP, key));
+		resetColoursIfConfirmed(targetColours(config), targetColours(DEFAULT_CONFIG),
+			() -> confirm("Restore the custom target colours to their defaults? Your current target colours "
+				+ "will be lost.", "Reset Target Colours", "Reset colours"),
+			() -> resetGlobalSettings(RightClickStylerPanel::resetTargetColourSettings));
+	}
+
+	private void resetCombatColours()
+	{
+		resetColoursIfConfirmed(combatColours(config), combatColours(DEFAULT_CONFIG),
+			() -> confirm("Restore the custom combat level colours to their defaults? Your current combat level "
+				+ "colours will be lost.", "Reset Combat Colours", "Reset colours"),
+			() -> resetGlobalSettings(RightClickStylerPanel::resetCombatColourSettings));
+	}
+
+	/**
+	 * Runs {@code reset} once {@code confirm} agrees. Nothing is asked when the colours already
+	 * match their defaults, since resetting would change nothing.
+	 *
+	 * @return true if the colours were reset
+	 */
+	static boolean resetColoursIfConfirmed(Color[] current, Color[] defaults, BooleanSupplier confirm,
+		Runnable reset)
+	{
+		if (Arrays.equals(current, defaults) || !confirm.getAsBoolean())
+		{
+			return false;
+		}
+		reset.run();
+		return true;
+	}
+
+	static Color[] targetColours(RightClickStylerConfig config)
+	{
+		return new Color[]{config.npcColour(), config.playerColour(), config.itemColour(),
+			config.objectColour(), config.otherColour()};
+	}
+
+	static Color[] combatColours(RightClickStylerConfig config)
+	{
+		return new Color[]{config.lowerLevelColour(), config.sameLevelColour(), config.higherLevelColour()};
+	}
+
+	/**
+	 * Unsets global settings through {@code reset}, then shows their defaults in the controls
+	 * and the preview. Themes are not touched, so unsaved theme edits are kept.
+	 */
+	private void resetGlobalSettings(Consumer<Consumer<String>> reset)
+	{
+		reset.accept(key -> configManager.unsetConfiguration(RightClickStylerConfig.GROUP, key));
 		refreshing = true;
 		try
 		{
@@ -675,6 +735,15 @@ class RightClickStylerPanel extends PluginPanel
 		}
 	}
 
+	/** The combat level mode is kept; only the three level colours return to their defaults. */
+	static void resetCombatColourSettings(Consumer<String> unset)
+	{
+		for (String key : COMBAT_COLOUR_KEYS)
+		{
+			unset.accept(key);
+		}
+	}
+
 	private CollapsibleSection buildLevelsSection()
 	{
 		CollapsibleSection section = new CollapsibleSection("Combat levels", "Colour the combat level shown in targets", false);
@@ -683,11 +752,15 @@ class RightClickStylerPanel extends PluginPanel
 		ColorJButton same = globalColourButton(config::sameLevelColour, "Same level colour", RightClickStylerConfig.KEY_SAME_LEVEL_COLOUR);
 		ColorJButton higher = globalColourButton(config::higherLevelColour, "Higher level colour", RightClickStylerConfig.KEY_HIGHER_LEVEL_COLOUR);
 
+		JButton reset = new JButton("Reset Combat Colours to Defaults");
+		reset.addActionListener(e -> resetCombatColours());
+
 		section.addRow(row("Mode", modeCombo(CombatLevelMode.values(), config::combatLevelMode, CombatLevelMode.CUSTOM,
-			RightClickStylerConfig.KEY_COMBAT_LEVEL_MODE, lower, same, higher)));
+			RightClickStylerConfig.KEY_COMBAT_LEVEL_MODE, lower, same, higher, reset)));
 		section.addRow(row("Lower level", lower));
 		section.addRow(row("Same level", same));
 		section.addRow(row("Higher level", higher));
+		section.addRow(reset);
 		return section;
 	}
 
@@ -1072,6 +1145,28 @@ class RightClickStylerPanel extends PluginPanel
 			return true;
 		}
 		return confirm("Discard unsaved changes to " + themeManager.active().name + "?", "Unsaved changes", "Discard");
+	}
+
+	/**
+	 * Reverts the working theme to its saved version, asking {@code confirm} first only when
+	 * that would discard unsaved edits.
+	 *
+	 * @return true if the theme was reverted; false if the user cancelled and nothing changed
+	 */
+	static boolean revertEdits(ThemeManager themeManager, BooleanSupplier confirm)
+	{
+		if (themeManager.isEdited() && !confirm.getAsBoolean())
+		{
+			return false;
+		}
+		themeManager.revert();
+		return true;
+	}
+
+	private boolean confirmRevert()
+	{
+		return confirm("Revert " + themeManager.active().name + "? Your unsaved changes will be lost and the "
+			+ "last saved version restored.", "Revert changes", "Revert changes");
 	}
 
 	/**
