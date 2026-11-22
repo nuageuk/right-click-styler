@@ -4,29 +4,28 @@
 
 ### Added
 
-- A **Reset Combat Colours to Defaults** control. It restores the lower, same and higher level colours and keeps the selected mode.
-- Confirmation before **Revert** discards unsaved theme edits, and before either colour reset replaces your current colours. Nothing is asked when there is nothing to discard or reset.
-- Optional styling integration for compatible overlays such as Improved Right-Clicks, using RuneLite plugin messages. See [Plugin messages](PLUGIN_MESSAGES.md). Contributed by wukuna in PR #5.
-
-### Improved
-
-- Inline icon caching and the inactive style message, which now also carries `version=1`.
+- A **Reset Combat Colours to Defaults** control. It restores the lower, same and higher level colours while preserving the selected mode.
+- Confirmation dialogs for **Revert** and both colour resets, preventing accidental loss of custom settings. No confirmation appears when there is nothing to discard or reset.
+- Optional theme-sharing integration for compatible overlays such as Improved Right-Clicks, using RuneLite plugin messages. See [Plugin messages](PLUGIN_MESSAGES.md).
 
 ### Fixed
 
-- Inline menu icons now update when another plugin replaces them, including in styled submenus. Contributed by wukuna in PR #5.
-- Custom target colours now apply to ground items rewritten by Loot Filters. Colours set by filter rules are still preserved.
+- Ground-item icons from compatible plugins now render in styled menus and submenus, including correct refreshes when their sprites are replaced.
+- Custom target colours now apply correctly to ground items modified by Loot Filters, while preserving intentional third-party colours.
 
 ### Compatibility
 
-- No configuration keys or saved theme formats changed. Existing themes, exports and profiles remain supported.
-- Right Click Styler works on its own; the style integration is optional.
+- Existing themes, exports, configuration keys and RuneLite profiles remain supported.
+- Right Click Styler works independently; integration with other plugins is optional.
 
 ### Known limitations
 
-- The 1.1.0 known limitations still apply.
-- In Custom target mode, the second item of a combined target, such as **Use Knife -> Logs**, keeps the game's colour.
+- Other known limitations from v1.1.0 remain unless addressed above.
+- In Custom target mode, the second item in a combined target, such as **Use Knife → Logs**, retains the game's colour.
 
+### Thanks
+
+Special thanks to [@wukuna](https://github.com/wukuna) for contributing the ground-item icon improvements and theme-sharing integration in [PR #5](https://github.com/nuageuk/right-click-styler/pull/5), and for helping improve compatibility between our plugins!
 ## [1.1.0] — 2026-11-20
 
 ### Added
