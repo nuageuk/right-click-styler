@@ -190,7 +190,7 @@ The sidebar's **Advanced > Reset all settings** also restores visual defaults an
 - A failed final submenu draw uses native rendering for the remainder of that menu opening; a new opening retries. A failed ordinary-menu render uses native rendering until the plugin is restarted. In rare cases, a menu change after native drawing has been consumed can leave one frame without a visible menu.
 - Ground-item icons inserted into context menus by other plugins are not currently reproduced by the styled renderer. Menu geometry and selection remain native.
 - Exceptionally large menus may reduce FPS while open. Normal-sized menus showed no measurable FPS difference in live Windows testing.
-- Unicode rendering on macOS has an open issue and has not been verified as fixed for this release.
+- Sidebar controls such as the **More** chevron and the rule-removal cross are drawn rather than taken from Unicode font glyphs. This has been verified on Windows; confirmation on macOS is pending.
 
 The submenu path samples the game's own draw to identify visible child regions, then restores the sampled framebuffer before drawing the style. It does not create menu actions or change the game's selection handling.
 

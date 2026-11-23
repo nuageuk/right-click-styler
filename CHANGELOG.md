@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.1.2] — 2026-11-23
+
+### Fixed
+
+- The sidebar's **More** chevron and rule-removal cross are now drawn with Java2D instead of Unicode symbols, so they no longer depend on the system font. The temporary **Copied!** state and existing button actions are unchanged. ([#2](https://github.com/nuageuk/right-click-styler/issues/2))
+- In Custom target mode, combined item interactions such as **Use Knife → Logs** now give both names their Custom Item colour. This covers inventory, equipped and ground items, and mixed targets such as an item used on a player. ([#6](https://github.com/nuageuk/right-click-styler/issues/6))
+- Intentional colours from other plugins, such as Loot Filters, are still preserved in combined targets. Game target mode keeps the game's own colours.
+
+### Compatibility
+
+- Existing themes, exports, configuration keys and RuneLite profiles remain supported.
+
+### Known limitations
+
+- The drawn sidebar icons have been verified on Windows. Confirmation on macOS is pending.
+- Other known limitations from v1.1.1 remain, except the combined-target colouring fixed above.
+
 ## [1.1.1] — 2026-11-22
 
 ### Added
