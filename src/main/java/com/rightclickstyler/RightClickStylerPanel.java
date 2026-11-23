@@ -99,6 +99,66 @@ class RightClickStylerPanel extends PluginPanel
 			return 14;
 		}
 	};
+	private static final Icon MORE_ICON = new Icon()
+	{
+		@Override
+		public void paintIcon(Component component, Graphics graphics, int x, int y)
+		{
+			Graphics g = graphics.create();
+			try
+			{
+				g.setColor(component.getForeground());
+				g.drawLine(x + 1, y + 2, x + 4, y + 5);
+				g.drawLine(x + 4, y + 5, x + 7, y + 2);
+			}
+			finally
+			{
+				g.dispose();
+			}
+		}
+
+		@Override
+		public int getIconWidth()
+		{
+			return 9;
+		}
+
+		@Override
+		public int getIconHeight()
+		{
+			return 7;
+		}
+	};
+	private static final Icon REMOVE_ICON = new Icon()
+	{
+		@Override
+		public void paintIcon(Component component, Graphics graphics, int x, int y)
+		{
+			Graphics g = graphics.create();
+			try
+			{
+				g.setColor(component.getForeground());
+				g.drawLine(x + 1, y + 1, x + 8, y + 8);
+				g.drawLine(x + 8, y + 1, x + 1, y + 8);
+			}
+			finally
+			{
+				g.dispose();
+			}
+		}
+
+		@Override
+		public int getIconWidth()
+		{
+			return 10;
+		}
+
+		@Override
+		public int getIconHeight()
+		{
+			return 10;
+		}
+	};
 	private static final int ROW_GAP = 4;
 	private static final int SPINNER_COLUMNS = 4;
 	private static final int FIELD_PADDING = 4;
@@ -108,7 +168,7 @@ class RightClickStylerPanel extends PluginPanel
 	private static final String NEW_RULE_OPTION = "New rule";
 	// Holding a spinner arrow fires many changes; persist once it settles rather than on every step.
 	private static final int SPINNER_COMMIT_DELAY_MS = 300;
-	private static final String MORE_LABEL = "More ▾";
+	private static final String MORE_LABEL = "More";
 	private static final String COPIED_LABEL = "Copied!";
 	private static final int COPIED_FLASH_MS = 1500;
 	private static final String INTERFACE_STYLES_WARNING = "Interface Styles' 'High detail menu' or 'Menu alpha' setting "
@@ -165,9 +225,9 @@ class RightClickStylerPanel extends PluginPanel
 	private final JComboBox<Theme> themeCombo = new JComboBox<>();
 	private final JButton saveButton = new JButton("Save");
 	private final JButton revertButton = new JButton("Revert");
-	private final JButton moreButton = new JButton(MORE_LABEL);
+	private final JButton moreButton = new JButton(MORE_LABEL, MORE_ICON);
 	// Restarted on every export so a second click extends the flash instead of cutting it short.
-	private final Timer copiedFlash = new Timer(COPIED_FLASH_MS, e -> moreButton.setText(MORE_LABEL));
+	private final Timer copiedFlash = new Timer(COPIED_FLASH_MS, e -> setMoreCopied(false));
 
 	// Theme-bound controls; re-synced whenever the active/working theme changes.
 	private final List<Runnable> themeControlRefreshers = new ArrayList<>();
@@ -974,7 +1034,7 @@ class RightClickStylerPanel extends PluginPanel
 
 		ColorJButton colourBtn = colourButton(rule.colour, "Rule colour", c -> rule.colour = c, c -> persistRules());
 
-		JButton remove = new JButton("✕");
+		JButton remove = new JButton(REMOVE_ICON);
 		remove.setToolTipText("Remove rule");
 		remove.setMargin(REMOVE_INSETS);
 		remove.addActionListener(e ->
@@ -1270,8 +1330,14 @@ class RightClickStylerPanel extends PluginPanel
 				JOptionPane.ERROR_MESSAGE);
 			return;
 		}
-		moreButton.setText(COPIED_LABEL);
+		setMoreCopied(true);
 		copiedFlash.restart();
+	}
+
+	void setMoreCopied(boolean copied)
+	{
+		moreButton.setText(copied ? COPIED_LABEL : MORE_LABEL);
+		moreButton.setIcon(copied ? null : MORE_ICON);
 	}
 
 	private void promptImport()
