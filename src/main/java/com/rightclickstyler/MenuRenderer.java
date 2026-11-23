@@ -143,13 +143,22 @@ final class MenuRenderer
 		List<Row> rows, Rectangle bounds, int hoverIndex, int localCombatLevel,
 		String headerText, TargetKind headerKind, int scrollRows)
 	{
+		render(graphics, client, theme, config, rows, bounds, hoverIndex, localCombatLevel,
+			headerText, headerKind, null, scrollRows);
+	}
+
+	void render(Graphics2D graphics, Client client, Theme theme, RightClickStylerConfig config,
+		List<Row> rows, Rectangle bounds, int hoverIndex, int localCombatLevel,
+		String headerText, TargetKind headerKind, TargetKind headerSourceKind, int scrollRows)
+	{
 		// Work on a copy so no colour/font/clip change leaks to other overlays or Swing children.
 		Graphics2D g = (Graphics2D) graphics.create();
 		try
 		{
 			prepare(g, client, theme, config);
 			targetColours.load(config, localCombatLevel);
-			renderMenu(g, config, rows, bounds, hoverIndex, headerText, headerKind, scrollRows);
+			renderMenu(g, config, rows, bounds, hoverIndex, headerText, headerKind,
+				headerSourceKind, scrollRows);
 		}
 		finally
 		{
@@ -201,7 +210,7 @@ final class MenuRenderer
 	}
 
 	private void renderMenu(Graphics2D graphics, RightClickStylerConfig config, List<Row> rows, Rectangle bounds,
-		int hoverIndex, String headerText, TargetKind headerKind, int scrollRows)
+		int hoverIndex, String headerText, TargetKind headerKind, TargetKind headerSourceKind, int scrollRows)
 	{
 		int baselineNudge = Limits.baselineNudge(config);
 
@@ -228,7 +237,7 @@ final class MenuRenderer
 			graphics.fillRect(bounds.x, bounds.y, bounds.width, HEADER_HEIGHT);
 			graphics.setFont(font);
 			drawHeader(graphics, headerText == null ? HEADER_TEXT : headerText,
-				headerText == null ? null : headerKind, bounds,
+				headerText == null ? null : headerKind, headerSourceKind, bounds,
 				bounds.y + centreOffset(HEADER_HEIGHT, baselineNudge));
 		}
 		drawRows(graphics, config, rows, bounds, hoverIndex,
@@ -416,6 +425,8 @@ final class MenuRenderer
 			x += metrics.charWidth(' ');
 		}
 		List<Run> runs = targetRuns(row.target);
+		int separator = pairedSeparator(runs, row.sourceKind);
+		boolean entityHasText = false;
 		for (int i = 0; i < runs.size(); i++)
 		{
 			if (x >= maxX)
@@ -439,8 +450,32 @@ final class MenuRenderer
 			{
 				continue;
 			}
-			Color colour = graphics != null ? targetColours.resolve(run, row.kind) : null;
+			Color colour = null;
+			if (graphics != null)
+			{
+				if (separator < 0)
+				{
+					colour = targetColours.resolve(run, row.kind);
+				}
+				else if (i == separator || (i < separator && row.sourceKind == TargetKind.OTHER))
+				{
+					colour = run.tagColour != null ? run.tagColour : DEFAULT_TAG_COLOUR;
+				}
+				else
+				{
+					colour = targetColours.resolve(run,
+						i < separator ? row.sourceKind : row.kind, !entityHasText);
+				}
+			}
 			x += drawFittedRun(graphics, metrics, text, x, textY, colour, maxX);
+			if (i == separator)
+			{
+				entityHasText = false;
+			}
+			else if (!text.trim().isEmpty())
+			{
+				entityHasText = true;
+			}
 			targetOnly = false;
 		}
 		return x;
@@ -540,7 +575,8 @@ final class MenuRenderer
 	 * header shares a plain row's text box and is fitted the same way when the selected font or
 	 * text offset needs more room than that box.
 	 */
-	private void drawHeader(Graphics2D graphics, String raw, TargetKind kind, Rectangle bounds, int y)
+	private void drawHeader(Graphics2D graphics, String raw, TargetKind kind, TargetKind sourceKind,
+		Rectangle bounds, int y)
 	{
 		if (raw.isEmpty())
 		{
@@ -553,7 +589,7 @@ final class MenuRenderer
 		{
 			return;
 		}
-		int measured = layoutHeader(null, runs, kind, 0, y);
+		int measured = layoutHeader(null, runs, kind, sourceKind, 0, y);
 		if (shouldCompress(available, measured))
 		{
 			Graphics2D fitted = (Graphics2D) graphics.create();
@@ -562,7 +598,7 @@ final class MenuRenderer
 				fitted.translate(startX, 0);
 				fitted.scale((double) available / measured, 1);
 				keepRunScaleProportional(fitted);
-				layoutHeader(fitted, runs, kind, 0, y);
+				layoutHeader(fitted, runs, kind, sourceKind, 0, y);
 			}
 			finally
 			{
@@ -571,7 +607,7 @@ final class MenuRenderer
 		}
 		else
 		{
-			layoutHeader(graphics, runs, kind, startX, y);
+			layoutHeader(graphics, runs, kind, sourceKind, startX, y);
 		}
 	}
 
@@ -580,14 +616,42 @@ final class MenuRenderer
 	 *
 	 * @return the header's width
 	 */
-	private int layoutHeader(Graphics2D graphics, List<Run> runs, TargetKind kind, int startX, int y)
+	private int layoutHeader(Graphics2D graphics, List<Run> runs, TargetKind kind,
+		TargetKind sourceKind, int startX, int y)
 	{
 		int x = startX;
-		for (Run run : runs)
+		int separator = pairedSeparator(runs, sourceKind);
+		boolean entityHasText = false;
+		for (int i = 0; i < runs.size(); i++)
 		{
+			Run run = runs.get(i);
+			Color colour = null;
+			if (graphics != null && run.iconIndex < 0)
+			{
+				if (separator < 0)
+				{
+					colour = headerRunColour(run, kind);
+				}
+				else if (i == separator || (i < separator && sourceKind == TargetKind.OTHER))
+				{
+					colour = headerRunColour(run, null);
+				}
+				else
+				{
+					colour = targetColours.resolve(run, i < separator ? sourceKind : kind, !entityHasText);
+				}
+			}
 			x += run.iconIndex >= 0
 				? drawIcon(graphics, metrics, run.iconIndex, x, y)
-				: drawRun(graphics, metrics, run.text, x, y, graphics == null ? null : headerRunColour(run, kind));
+				: drawRun(graphics, metrics, run.text, x, y, colour);
+			if (i == separator)
+			{
+				entityHasText = false;
+			}
+			else if (run.iconIndex < 0 && !run.text.trim().isEmpty())
+			{
+				entityHasText = true;
+			}
 		}
 		return x - startX;
 	}
@@ -815,6 +879,48 @@ final class MenuRenderer
 		return resolved;
 	}
 
+	/** A standalone connector in a verified targeting row separates its two entity names. */
+	private static int pairedSeparator(List<Run> runs, TargetKind sourceKind)
+	{
+		if (sourceKind == null)
+		{
+			return -1;
+		}
+		int separator = -1;
+		boolean before = false;
+		boolean after = false;
+		for (int i = 0; i < runs.size(); i++)
+		{
+			Run run = runs.get(i);
+			if (run.iconIndex >= 0)
+			{
+				continue;
+			}
+			String text = run.text.trim();
+			if (text.equals("->"))
+			{
+				if (separator >= 0 || !before)
+				{
+					return -1;
+				}
+				separator = i;
+			}
+			else if (text.contains("->"))
+			{
+				return -1;
+			}
+			else if (!text.isEmpty() && separator < 0)
+			{
+				before = true;
+			}
+			else if (!text.isEmpty())
+			{
+				after = true;
+			}
+		}
+		return after ? separator : -1;
+	}
+
 	private static String clean(String raw)
 	{
 		return raw == null ? "" : Limits.truncate(raw, MAX_ENTRY_LENGTH);
@@ -947,6 +1053,7 @@ final class MenuRenderer
 		private String option;
 		private String target;
 		private TargetKind kind;
+		private TargetKind sourceKind;
 		private boolean hasSubMenu;
 		private boolean submenuOpensLeft;
 
@@ -964,6 +1071,7 @@ final class MenuRenderer
 			this.option = option;
 			this.target = target;
 			this.kind = kind;
+			this.sourceKind = null;
 			this.hasSubMenu = false;
 			this.submenuOpensLeft = false;
 		}
@@ -973,6 +1081,16 @@ final class MenuRenderer
 			set(option, target, kind);
 			this.hasSubMenu = hasSubMenu;
 			this.submenuOpensLeft = opensLeft;
+		}
+
+		void sourceKind(TargetKind sourceKind)
+		{
+			this.sourceKind = sourceKind;
+		}
+
+		TargetKind sourceKind()
+		{
+			return sourceKind;
 		}
 
 		// Read by the submenu image cache, whose key is exactly what a row draws.
@@ -994,7 +1112,9 @@ final class MenuRenderer
 		/** Kind, submenu arrow and arrow side, packed for comparison. */
 		int flags()
 		{
-			return (kind == null ? 7 : kind.ordinal()) << 2 | (hasSubMenu ? 2 : 0) | (submenuOpensLeft ? 1 : 0);
+			return (kind == null ? 7 : kind.ordinal()) << 5
+				| (sourceKind == null ? 7 : sourceKind.ordinal()) << 2
+				| (hasSubMenu ? 2 : 0) | (submenuOpensLeft ? 1 : 0);
 		}
 	}
 
@@ -1047,6 +1167,11 @@ final class MenuRenderer
 
 		private Color resolve(Run run, TargetKind kind)
 		{
+			return resolve(run, kind, false);
+		}
+
+		private Color resolve(Run run, TargetKind kind, boolean firstEntityRun)
+		{
 			Color tagColour = run.tagColour != null ? run.tagColour : DEFAULT_TAG_COLOUR;
 			if (run.isLevel)
 			{
@@ -1062,7 +1187,7 @@ final class MenuRenderer
 			}
 			// Native target tags are the category defaults. A different colour, or a
 			// later span within the target, is intentional formatting to preserve.
-			if (run.tagColour != null && (run.colourSpan > 0
+			if (run.tagColour != null && ((run.colourSpan > 0 && !firstEntityRun)
 				|| !isNativeTargetColour(run.tagColour, kind)))
 			{
 				return run.tagColour;

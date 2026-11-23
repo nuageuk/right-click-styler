@@ -332,7 +332,8 @@ class MenuOverlay extends Overlay
 			SubmenuOutcome rejection = authoritativeRejection(result, tree);
 			// Ambiguous pixels: theme only when every chain they fit renders identically.
 			int[][] equivalent = rejection == SubmenuOutcome.FALLBACK_AMBIGUOUS
-				? visuallyEquivalentAlternatives(result, tree, viewport, frameMouse, scroll, null) : null;
+				? visuallyEquivalentAlternatives(result, tree, viewport, frameMouse, scroll,
+					selectedWidgetForTree(tree), null) : null;
 			// Otherwise, only the native draw's own pixels may tell the alternatives apart.
 			int[] identified = null;
 			if (rejection == SubmenuOutcome.FALLBACK_AMBIGUOUS && equivalent == null)
@@ -549,12 +550,18 @@ class MenuOverlay extends Overlay
 	static int[][] visuallyEquivalentAlternatives(NativeSubmenuProbe.Result result, SubmenuTree tree,
 		ScrollableMenuViewport viewport, Point mouse, int scroll)
 	{
-		return visuallyEquivalentAlternatives(result, tree, viewport, mouse, scroll, null);
+		return visuallyEquivalentAlternatives(result, tree, viewport, mouse, scroll, null, null);
 	}
 
 	/** @param why diagnostics only: receives the reason when the result is null; may be null */
 	static int[][] visuallyEquivalentAlternatives(NativeSubmenuProbe.Result result, SubmenuTree tree,
 		ScrollableMenuViewport viewport, Point mouse, int scroll, StringBuilder why)
+	{
+		return visuallyEquivalentAlternatives(result, tree, viewport, mouse, scroll, null, why);
+	}
+
+	private static int[][] visuallyEquivalentAlternatives(NativeSubmenuProbe.Result result, SubmenuTree tree,
+		ScrollableMenuViewport viewport, Point mouse, int scroll, Widget selectedWidget, StringBuilder why)
 	{
 		ExactCoverageResolver.Outcome exact = result.exact;
 		if (!result.framebufferVerified || exact == null
@@ -597,11 +604,13 @@ class MenuOverlay extends Overlay
 			return null; // the previous resolver proved a chain the pixels do not fit
 		}
 		List<MenuRenderer.Row> rootRows = new ArrayList<>();
-		SubmenuImageCache.Menu rootMenu = rootMenu(tree, viewport, mouse, scroll, rootRows);
-		SubmenuImageCache.Menu[] first = drawnMenus(tree, alternatives[0], rootMenu, rootRows, mouse);
+		SubmenuImageCache.Menu rootMenu = rootMenu(tree, viewport, mouse, scroll, rootRows, selectedWidget);
+		SubmenuImageCache.Menu[] first = drawnMenus(tree, alternatives[0], rootMenu, rootRows, mouse,
+			selectedWidget);
 		for (int i = 1; i < alternatives.length; i++)
 		{
-			SubmenuImageCache.Menu[] other = drawnMenus(tree, alternatives[i], rootMenu, rootRows, mouse);
+			SubmenuImageCache.Menu[] other = drawnMenus(tree, alternatives[i], rootMenu, rootRows, mouse,
+				selectedWidget);
 			if (SubmenuImageCache.menusDifference(first, other) != SubmenuImageCache.Miss.HIT)
 			{
 				if (why != null)
@@ -618,10 +627,10 @@ class MenuOverlay extends Overlay
 
 	/** The root's renderer inputs, filled as {@link #renderOrReuseSubmenuImage} fills them; fills {@code rootRows}. */
 	private static SubmenuImageCache.Menu rootMenu(SubmenuTree tree, ScrollableMenuViewport viewport,
-		Point mouse, int scroll, List<MenuRenderer.Row> rootRows)
+		Point mouse, int scroll, List<MenuRenderer.Row> rootRows, Widget selectedWidget)
 	{
 		SubmenuTree.Node root = tree.nodes.get(0);
-		MenuRenderer.TargetKind rootKind = fillMenuRows(root, null, rootRows, new ArrayList<>());
+		MenuRenderer.TargetKind rootKind = fillMenuRows(root, null, rootRows, new ArrayList<>(), selectedWidget);
 		return SubmenuImageCache.menu(root.bounds, root.header, rootKind,
 			scroll, viewport.hoverIndex(mouse), rootRows);
 	}
@@ -662,9 +671,12 @@ class MenuOverlay extends Overlay
 		for (int[] chain : preparedChains)
 		{
 			List<MenuRenderer.Row> rootRows = new ArrayList<>();
-			SubmenuImageCache.Menu root = rootMenu(live, preparedViewport, preparedMouse, preparedScroll, rootRows);
+			Widget selectedWidget = selectedWidgetForTree(live);
+			SubmenuImageCache.Menu root = rootMenu(live, preparedViewport, preparedMouse, preparedScroll,
+				rootRows, selectedWidget);
 			if (SubmenuImageCache.menusDifference(preparedMenus,
-				drawnMenus(live, chain, root, rootRows, preparedMouse)) != SubmenuImageCache.Miss.HIT)
+				drawnMenus(live, chain, root, rootRows, preparedMouse, selectedWidget))
+				!= SubmenuImageCache.Miss.HIT)
 			{
 				return false;
 			}
@@ -694,7 +706,7 @@ class MenuOverlay extends Overlay
 
 	/** The renderer inputs of one chain, filled exactly as {@link #renderOrReuseSubmenuImage} fills them. */
 	private static SubmenuImageCache.Menu[] drawnMenus(SubmenuTree tree, int[] chain,
-		SubmenuImageCache.Menu rootMenu, List<MenuRenderer.Row> rootRows, Point mouse)
+		SubmenuImageCache.Menu rootMenu, List<MenuRenderer.Row> rootRows, Point mouse, Widget selectedWidget)
 	{
 		SubmenuImageCache.Menu[] menus = new SubmenuImageCache.Menu[chain.length + 1];
 		menus[0] = rootMenu;
@@ -704,8 +716,12 @@ class MenuOverlay extends Overlay
 			SubmenuTree.Node node = menuNode(tree, chain, depth);
 			MenuRenderer.Row parentRow = openingRow(tree, node, menuNode(tree, chain, depth - 1), parentRows);
 			List<MenuRenderer.Row> rows = new ArrayList<>();
-			MenuRenderer.TargetKind headerKind = fillMenuRows(node, parentRow, rows, new ArrayList<>());
-			menus[depth] = SubmenuImageCache.menu(node.bounds, node.header, headerKind, 0,
+			MenuRenderer.TargetKind headerKind = fillMenuRows(node, parentRow, rows,
+				new ArrayList<>(), selectedWidget);
+			MenuRenderer.TargetKind headerSourceKind = node.headerFromTarget && parentRow != null
+				? parentRow.sourceKind() : null;
+			menus[depth] = SubmenuImageCache.menu(node.bounds, node.header, headerKind,
+				headerSourceKind, 0,
 				hoverIndex(node.bounds, rows.size(), mouse), rows);
 			parentRows = rows;
 		}
@@ -774,6 +790,7 @@ class MenuOverlay extends Overlay
 	{
 		int menus = activeChain.length + 1;
 		int[] hovered = new int[menus];
+		Widget selectedWidget = selectedWidgetForTree(tree);
 		for (int depth = 0; depth < menus; depth++)
 		{
 			SubmenuTree.Node node = menuNode(tree, activeChain, depth);
@@ -781,7 +798,9 @@ class MenuOverlay extends Overlay
 			// Shallower depths are filled first, so the opening row already holds this frame's state.
 			MenuRenderer.Row parentRow = depth == 0 ? null : openingRow(tree, node,
 				menuNode(tree, activeChain, depth - 1), submenuRowBuffer(depth - 1).rows);
-			buffer.headerKind = fillMenuRows(node, parentRow, buffer.rows, buffer.pool);
+			buffer.headerKind = fillMenuRows(node, parentRow, buffer.rows, buffer.pool, selectedWidget);
+			buffer.headerSourceKind = node.headerFromTarget && parentRow != null
+				? parentRow.sourceKind() : null;
 			hovered[depth] = depth == 0
 				? viewport.hoverIndex(mouse)
 				: hoverIndex(node.bounds, buffer.rows.size(), mouse);
@@ -792,7 +811,7 @@ class MenuOverlay extends Overlay
 			SubmenuTree.Node node = menuNode(tree, activeChain, depth);
 			RowBuffer buffer = submenuRowBuffer(depth);
 			drawn[depth] = SubmenuImageCache.menu(node.bounds, node.header, buffer.headerKind,
-				depth == 0 ? scroll : 0, hovered[depth], buffer.rows);
+				buffer.headerSourceKind, depth == 0 ? scroll : 0, hovered[depth], buffer.rows);
 		}
 		if (!imageCacheEnabled)
 		{
@@ -847,7 +866,8 @@ class MenuOverlay extends Overlay
 				SubmenuTree.Node node = menuNode(tree, activeChain, depth);
 				RowBuffer buffer = submenuRowBuffer(depth);
 				renderer.render(g, client, theme, config, buffer.rows, node.bounds,
-					hovered[depth], localLevel, node.header, buffer.headerKind, depth == 0 ? scroll : 0);
+					hovered[depth], localLevel, node.header, buffer.headerKind,
+					buffer.headerSourceKind, depth == 0 ? scroll : 0);
 			}
 		}
 		finally
@@ -1084,6 +1104,7 @@ class MenuOverlay extends Overlay
 		private final List<MenuRenderer.Row> rows = new ArrayList<>();
 		private final List<MenuRenderer.Row> pool = new ArrayList<>();
 		private MenuRenderer.TargetKind headerKind;
+		private MenuRenderer.TargetKind headerSourceKind;
 	}
 
 	static boolean preparedFrameMatches(boolean menuOpen, Menu currentRoot, Menu preparedRoot)
@@ -1246,14 +1267,14 @@ class MenuOverlay extends Overlay
 	 */
 	private void fillRows(MenuEntry[] entries)
 	{
-		fillRows(entries, null, null, rows, rowPool);
+		fillRows(entries, null, null, rows, rowPool, null, null, null, selectedWidgetForEntries(entries));
 	}
 
 	private static void fillRows(MenuEntry[] entries, boolean[] childFlags,
 		boolean[] childOpensLeft,
 		List<MenuRenderer.Row> rows, List<MenuRenderer.Row> rowPool)
 	{
-		fillRows(entries, childFlags, childOpensLeft, rows, rowPool, null, null);
+		fillRows(entries, childFlags, childOpensLeft, rows, rowPool, null, null, null, null);
 	}
 
 	/** The already-filled row whose entry opened {@code node}, or null when it cannot be matched. */
@@ -1279,7 +1300,14 @@ class MenuOverlay extends Overlay
 	static MenuRenderer.TargetKind fillMenuRows(SubmenuTree.Node node, MenuRenderer.Row parentRow,
 		List<MenuRenderer.Row> rows, List<MenuRenderer.Row> rowPool)
 	{
+		return fillMenuRows(node, parentRow, rows, rowPool, null);
+	}
+
+	static MenuRenderer.TargetKind fillMenuRows(SubmenuTree.Node node, MenuRenderer.Row parentRow,
+		List<MenuRenderer.Row> rows, List<MenuRenderer.Row> rowPool, Widget selectedWidget)
+	{
 		MenuRenderer.TargetKind parentKind = parentRow == null ? null : parentRow.kind();
+		MenuRenderer.TargetKind parentSourceKind = parentRow == null ? null : parentRow.sourceKind();
 		String parentPlainTarget = null;
 		if (parentKind != null && parentKind != MenuRenderer.TargetKind.OTHER && parentRow.target() != null)
 		{
@@ -1287,7 +1315,8 @@ class MenuOverlay extends Overlay
 		}
 		boolean inherits = parentPlainTarget != null && !parentPlainTarget.isEmpty();
 		fillRows(node.entries, node.childFlags, node.childOpensLeft, rows, rowPool,
-			inherits ? parentKind : null, inherits ? parentPlainTarget : null);
+			inherits ? parentKind : null, inherits ? parentPlainTarget : null,
+			inherits ? parentSourceKind : null, selectedWidget);
 		return parentRow != null && node.headerFromTarget ? parentKind : null;
 	}
 
@@ -1306,7 +1335,7 @@ class MenuOverlay extends Overlay
 			return own;
 		}
 		String target = entry.getTarget();
-		if (target == null || !target.contains(parentPlainTarget))
+		if (target == null)
 		{
 			return own;
 		}
@@ -1318,7 +1347,8 @@ class MenuOverlay extends Overlay
 	private static void fillRows(MenuEntry[] entries, boolean[] childFlags,
 		boolean[] childOpensLeft,
 		List<MenuRenderer.Row> rows, List<MenuRenderer.Row> rowPool,
-		MenuRenderer.TargetKind parentKind, String parentPlainTarget)
+		MenuRenderer.TargetKind parentKind, String parentPlainTarget,
+		MenuRenderer.TargetKind parentSourceKind, Widget selectedWidget)
 	{
 		rows.clear();
 		for (int i = entries.length - 1; i >= 0; i--)
@@ -1337,6 +1367,18 @@ class MenuOverlay extends Overlay
 						: childKind(entry, parentKind, parentPlainTarget),
 					childFlags != null && childFlags[i],
 					childOpensLeft != null && childOpensLeft[i]);
+				MenuRenderer.TargetKind sourceKind = row.kind() == MenuRenderer.TargetKind.OTHER
+					? null : interactionSourceKind(entry, selectedWidget);
+				if (sourceKind == null && parentKind == null)
+				{
+					sourceKind = copiedSourceKind(entry, entries, row.kind(), selectedWidget);
+				}
+				else if (sourceKind == null && parentSourceKind != null
+					&& classify(entry) == MenuRenderer.TargetKind.OTHER && row.kind() == parentKind)
+				{
+					sourceKind = parentSourceKind;
+				}
+				row.sourceKind(sourceKind);
 			}
 			else
 			{
@@ -1368,25 +1410,137 @@ class MenuOverlay extends Overlay
 
 	static MenuRenderer.TargetKind classify(MenuEntry entry)
 	{
-		if (entry.getNpc() != null)
+		MenuAction type = entry.getType();
+		if (entry.getNpc() != null || type == MenuAction.ITEM_USE_ON_NPC
+			|| type == MenuAction.WIDGET_TARGET_ON_NPC)
 		{
 			return MenuRenderer.TargetKind.NPC;
 		}
-		if (entry.getPlayer() != null)
+		if (entry.getPlayer() != null || type == MenuAction.ITEM_USE_ON_PLAYER
+			|| type == MenuAction.WIDGET_TARGET_ON_PLAYER)
 		{
 			return MenuRenderer.TargetKind.PLAYER;
 		}
-		MenuAction type = entry.getType();
 		if (isGameObjectAction(type))
 		{
 			return MenuRenderer.TargetKind.OBJECT;
 		}
-		if (isGroundItemAction(type) || heldItemId(entry) != NO_ITEM)
+		if (isGroundItemAction(type) || type == MenuAction.ITEM_USE_ON_ITEM
+			|| type == MenuAction.WIDGET_USE_ON_ITEM || heldItemId(entry) != NO_ITEM)
 		{
 			return MenuRenderer.TargetKind.ITEM;
 		}
 		return MenuRenderer.TargetKind.OTHER;
 	}
+
+	private Widget selectedWidgetForTree(SubmenuTree tree)
+	{
+		for (SubmenuTree.Node node : tree.nodes)
+		{
+			if (requiresSelectedWidget(node.entries))
+			{
+				return client.getSelectedWidget();
+			}
+		}
+		return null;
+	}
+
+	private Widget selectedWidgetForEntries(MenuEntry[] entries)
+	{
+		return requiresSelectedWidget(entries) ? client.getSelectedWidget() : null;
+	}
+
+	static boolean requiresSelectedWidget(MenuEntry[] entries)
+	{
+		for (MenuEntry entry : entries)
+		{
+			if (entry == null)
+			{
+				continue;
+			}
+			MenuAction action = entry.getType();
+			if (action == MenuAction.WIDGET_TARGET_ON_GROUND_ITEM
+				|| action == MenuAction.WIDGET_TARGET_ON_NPC
+				|| action == MenuAction.WIDGET_TARGET_ON_PLAYER
+				|| action == MenuAction.WIDGET_TARGET_ON_GAME_OBJECT
+				|| (action == MenuAction.WIDGET_TARGET_ON_WIDGET && heldItemId(entry) != NO_ITEM))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Only native targeting actions identify a source; other widgets retain their own formatting. */
+	static MenuRenderer.TargetKind interactionSourceKind(MenuEntry entry, Widget selectedWidget)
+	{
+		MenuAction type = entry.getType();
+		if (type == null)
+		{
+			return null;
+		}
+		switch (type)
+		{
+			case ITEM_USE_ON_ITEM:
+			case ITEM_USE_ON_GROUND_ITEM:
+			case ITEM_USE_ON_NPC:
+			case ITEM_USE_ON_PLAYER:
+			case ITEM_USE_ON_GAME_OBJECT:
+				return MenuRenderer.TargetKind.ITEM;
+			case WIDGET_USE_ON_ITEM:
+				return MenuRenderer.TargetKind.OTHER;
+			case WIDGET_TARGET_ON_WIDGET:
+				if (heldItemId(entry) == NO_ITEM)
+				{
+					return null;
+				}
+				return selectedWidget == null ? null
+					: selectedWidget.getId() == InterfaceID.Inventory.ITEMS
+						? MenuRenderer.TargetKind.ITEM : MenuRenderer.TargetKind.OTHER;
+			case WIDGET_TARGET_ON_GROUND_ITEM:
+			case WIDGET_TARGET_ON_NPC:
+			case WIDGET_TARGET_ON_PLAYER:
+			case WIDGET_TARGET_ON_GAME_OBJECT:
+				return selectedWidget == null ? null
+					: selectedWidget.getId() == InterfaceID.Inventory.ITEMS
+						? MenuRenderer.TargetKind.ITEM : MenuRenderer.TargetKind.OTHER;
+			default:
+				return null;
+		}
+	}
+
+	/** A copied submenu parent can reuse source context only from the exact native item it copied. */
+	private static MenuRenderer.TargetKind copiedSourceKind(MenuEntry entry, MenuEntry[] entries,
+		MenuRenderer.TargetKind kind, Widget selectedWidget)
+	{
+		if (entry.getType() != MenuAction.RUNELITE || entry.getSubMenu() == null
+			|| kind != MenuRenderer.TargetKind.ITEM || entry.getTarget() == null)
+		{
+			return null;
+		}
+		String target = Text.removeTags(entry.getTarget()).trim();
+		MenuRenderer.TargetKind source = null;
+		for (MenuEntry candidate : entries)
+		{
+			if (candidate == null || candidate == entry || candidate.getTarget() == null
+				|| !target.equals(Text.removeTags(candidate.getTarget()).trim())
+				|| classify(candidate) != kind)
+			{
+				continue;
+			}
+			MenuRenderer.TargetKind candidateSource = interactionSourceKind(candidate, selectedWidget);
+			if (candidateSource != null)
+			{
+				if (source != null && source != candidateSource)
+				{
+					return null;
+				}
+				source = candidateSource;
+			}
+		}
+		return source;
+	}
+
 
 	/** RuneLite inventory plugins copy the Examine target into a new submenu parent. */
 	private static MenuRenderer.TargetKind classifyWithItemOwner(MenuEntry entry, MenuEntry[] entries)
@@ -1424,15 +1578,16 @@ class MenuOverlay extends Overlay
 	}
 
 	/**
-	 * Container ops carry their item's id. A worn equipment slot's ops belong to the slot layer,
-	 * which holds no item of its own, so the worn item is read from the slot's item child, as
-	 * RuneLite's Menu Entry Swapper does.
+	 * Container ops carry their item's id. A worn equipment slot's ops, and items or spells used
+	 * on it, belong to the slot layer, which holds no item of its own, so the worn item is read
+	 * from the slot's item child, as RuneLite's Menu Entry Swapper does.
 	 */
 	static int heldItemId(MenuEntry entry)
 	{
 		int itemId = entry.getItemId();
 		MenuAction type = entry.getType();
-		if (itemId != NO_ITEM || (type != MenuAction.CC_OP && type != MenuAction.CC_OP_LOW_PRIORITY))
+		if (itemId != NO_ITEM || (type != MenuAction.CC_OP && type != MenuAction.CC_OP_LOW_PRIORITY
+			&& type != MenuAction.WIDGET_TARGET_ON_WIDGET))
 		{
 			return itemId;
 		}

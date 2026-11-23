@@ -93,6 +93,12 @@ final class SubmenuImageCache
 	static Menu menu(Rectangle bounds, String header, MenuRenderer.TargetKind headerKind, int scroll,
 		int hovered, List<MenuRenderer.Row> rows)
 	{
+		return menu(bounds, header, headerKind, null, scroll, hovered, rows);
+	}
+
+	static Menu menu(Rectangle bounds, String header, MenuRenderer.TargetKind headerKind,
+		MenuRenderer.TargetKind headerSourceKind, int scroll, int hovered, List<MenuRenderer.Row> rows)
+	{
 		int count = rows.size();
 		String[] options = new String[count];
 		String[] targets = new String[count];
@@ -104,7 +110,8 @@ final class SubmenuImageCache
 			targets[i] = row.target();
 			flags[i] = row.flags();
 		}
-		return new Menu(new Rectangle(bounds), header, headerKind, scroll, hovered, options, targets, flags);
+		return new Menu(new Rectangle(bounds), header, headerKind, headerSourceKind,
+			scroll, hovered, options, targets, flags);
 	}
 
 	static final class Menu
@@ -112,18 +119,21 @@ final class SubmenuImageCache
 		private final Rectangle bounds;
 		private final String header;
 		private final MenuRenderer.TargetKind headerKind;
+		private final MenuRenderer.TargetKind headerSourceKind;
 		private final int scroll;
 		private final int hovered;
 		private final String[] options;
 		private final String[] targets;
 		private final int[] flags;
 
-		private Menu(Rectangle bounds, String header, MenuRenderer.TargetKind headerKind, int scroll,
+		private Menu(Rectangle bounds, String header, MenuRenderer.TargetKind headerKind,
+			MenuRenderer.TargetKind headerSourceKind, int scroll,
 			int hovered, String[] options, String[] targets, int[] flags)
 		{
 			this.bounds = bounds;
 			this.header = header;
 			this.headerKind = headerKind;
+			this.headerSourceKind = headerSourceKind;
 			this.scroll = scroll;
 			this.hovered = hovered;
 			this.options = options;
@@ -199,7 +209,8 @@ final class SubmenuImageCache
 			{
 				found = Miss.BOUNDS;
 			}
-			else if (!Objects.equals(a.header, b.header) || a.headerKind != b.headerKind)
+			else if (!Objects.equals(a.header, b.header) || a.headerKind != b.headerKind
+				|| a.headerSourceKind != b.headerSourceKind)
 			{
 				found = Miss.HEADER;
 			}
@@ -257,9 +268,11 @@ final class SubmenuImageCache
 					}
 					break;
 				case HEADER:
-					if (!Objects.equals(a.header, b.header) || a.headerKind != b.headerKind)
+					if (!Objects.equals(a.header, b.header) || a.headerKind != b.headerKind
+						|| a.headerSourceKind != b.headerSourceKind)
 					{
-						return prefix + " '" + a.header + "'/" + a.headerKind + " vs '" + b.header + "'/" + b.headerKind;
+						return prefix + " '" + a.header + "'/" + a.headerKind + "/" + a.headerSourceKind
+							+ " vs '" + b.header + "'/" + b.headerKind + "/" + b.headerSourceKind;
 					}
 					break;
 				case SCROLL:
